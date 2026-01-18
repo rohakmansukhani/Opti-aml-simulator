@@ -10,7 +10,7 @@
  * - Sample exploits display
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, Suspense } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { api } from '@/lib/api';
 import {
@@ -74,6 +74,18 @@ interface ComparisonData {
 }
 
 export default function ComparisonPage() {
+    return (
+        <Suspense fallback={
+            <div className="flex items-center justify-center h-screen bg-slate-50">
+                <CircularProgress size={40} className="text-blue-600" />
+            </div>
+        }>
+            <ComparisonPageContent />
+        </Suspense>
+    );
+}
+
+function ComparisonPageContent() {
     const router = useRouter();
     const searchParams = useSearchParams();
 
