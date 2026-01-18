@@ -1,0 +1,26 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.env
+
+# MacOS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Database
+*.db
+*.sqlite
+
+# NodeJS
+node_modules/
+.next/
+dist/
+out/
+
+# Temporary Ignore: Aggregate Utility Files
+Flowcharts/

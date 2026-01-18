@@ -1,0 +1,81 @@
+transaction_id,customer_id,transaction_date,transaction_amount,debit_credit_indicator,transaction_type,channel,transaction_narrative,beneficiary_name,beneficiary_bank
+TX001,CUST001,2024-01-05,5800,D,Wire,International_Wire,Tuition Payment Semester 1,University of Oxford,Barclays UK
+TX002,CUST002,2024-01-05,12500,D,Wire,International_Wire,Property Investment Payment,London Real Estate Ltd,HSBC UK
+TX003,CUST003,2024-01-05,850,D,ATM,ATM,Cash Withdrawal,Self,ATM Network
+TX004,CUST004,2024-01-06,3200,D,Wire,Domestic,Healthcare Payment,Private Hospital,Lloyds Bank
+TX005,CUST005,2024-01-06,2100,D,Wire,International_Wire,Tuition Fee,Cambridge University,NatWest
+TX006,CUST006,2024-01-06,450,C,Online,Domestic,Salary Credit,ABC Corporation,HSBC
+TX007,CUST007,2024-01-07,8500,D,Wire,International_Wire,Business Supplier Payment,Tech Solutions Inc,Citibank US
+TX008,CUST008,2024-01-07,6100,D,Wire,NRISR,International Wire Transfer,Family Abroad,Standard Chartered
+TX009,CUST009,2024-01-08,15000,D,Wire,International_Wire,Equipment Purchase,Industrial Supplies Co,Bank of America
+TX010,CUST010,2024-01-08,18,C,Online,Domestic,Freelance Payment,Upwork Client,PayPal
+TX011,CUST010,2024-01-08,15,C,Online,Domestic,Freelance Payment,Fiverr Client,PayPal
+TX012,CUST010,2024-01-08,22,C,Online,Domestic,Freelance Payment,Freelancer Client,Wise
+TX013,CUST010,2024-01-08,19,C,Online,Domestic,Tutoring Payment,Student Parent,Bank Transfer
+TX014,CUST011,2024-01-09,1800,D,Branch,Domestic,Fixed Deposit Opening,Self,Barclays UK
+TX015,CUST012,2024-01-09,9200,D,Wire,International_Wire,Investment Transfer,Vanguard Investments,JP Morgan
+TX016,CUST013,2024-01-10,4500,D,Wire,NRISR,Business Payment,Overseas Supplier,ICICI Bank
+TX017,CUST014,2024-01-10,600,D,ATM,ATM,Cash Withdrawal,Self,ATM Network
+TX018,CUST015,2024-01-11,7800,D,Wire,International_Wire,Car Loan EMI Payment,Auto Finance Ltd,Santander UK
+TX019,CUST016,2024-01-11,6200,D,Wire,International_Wire,University Accommodation,Student Housing Ltd,Barclays UK
+TX020,CUST017,2024-01-12,25000,D,Wire,International_Wire,Import Payment,Chinese Manufacturer,Bank of China
+TX021,CUST018,2024-01-12,2100,D,Branch,Domestic,Medical Expense,Private Clinic,Lloyds Bank
+TX022,CUST019,2024-01-13,10500,D,Wire,NRISR,Investment Abroad,Property Developer,Dubai Islamic Bank
+TX023,CUST020,2024-01-13,3200,D,Wire,International_Wire,Business License Fee,UK Gov Authority,Government Bank
+TX024,CUST001,2024-01-14,4500,D,Wire,International_Wire,Education Material Purchase,Academic Books Ltd,Amazon Pay
+TX025,CUST002,2024-01-15,3800,D,Online,Domestic,Mortgage Payment,Halifax Bank,Halifax
+TX026,CUST003,2024-01-15,12000,C,Wire,International_Wire,Client Payment Received,US Client Corporation,Wells Fargo
+TX027,CUST004,2024-01-16,900,D,ATM,ATM,Cash Withdrawal,Self,ATM Network
+TX028,CUST005,2024-01-16,19,C,Online,Domestic,Small Gig Payment,TaskRabbit,Stripe
+TX029,CUST005,2024-01-16,17,C,Online,Domestic,Small Gig Payment,Rover Pet Sitting,PayPal
+TX030,CUST006,2024-01-17,15800,D,Wire,International_Wire,Holiday Package,Travel Agency,Emirates NBD
+TX031,CUST007,2024-01-17,9800,D,Wire,NRISR,Supplier Payment,European Vendor,Deutsche Bank
+TX032,CUST008,2024-01-18,5500,D,Wire,International_Wire,Family Support,Relative Abroad,Remitly
+TX033,CUST009,2024-01-18,18500,D,Wire,International_Wire,Equipment Import,Japanese Supplier,Mizuho Bank
+TX034,CUST010,2024-01-19,2800,D,Wire,International_Wire,Online Course Fee,Coursera Platform,Chase Bank
+TX035,CUST011,2024-01-19,75000,D,Branch,Domestic,Fixed Deposit Renewal,Self,Barclays UK
+TX036,CUST012,2024-01-20,8900,D,Wire,International_Wire,Charity Donation,International NGO,World Bank
+TX037,CUST013,2024-01-20,6200,D,Wire,NRISR,Business Supplier Payment,Indian Supplier,HDFC Bank
+TX038,CUST014,2024-01-21,450,D,Branch,Domestic,Utility Payment,Electric Company,Direct Debit
+TX039,CUST015,2024-01-21,11200,D,Wire,International_Wire,Personal Loan Repayment,Personal Loan Ltd,Metro Bank
+TX040,CUST016,2024-01-22,5900,D,Wire,International_Wire,Study Materials,Educational Publisher,Oxford Press
+TX041,CUST017,2024-01-22,32000,D,Wire,International_Wire,Cryptocurrency Purchase,Coinbase Exchange,Coinbase
+TX042,CUST018,2024-01-23,1600,D,ATM,ATM,Cash Withdrawal,Self,ATM Network
+TX043,CUST019,2024-01-23,9500,D,Wire,NRISR,Investment Property Down Payment,Real Estate Developer,Emirates Bank
+TX044,CUST020,2024-01-24,4100,D,Wire,International_Wire,Business Insurance Premium,Insurance Provider,Aviva
+TX045,CUST001,2024-01-25,16,C,Online,Domestic,Tutoring Income,Private Student,Bank Transfer
+TX046,CUST001,2024-01-25,21,C,Online,Domestic,Tutoring Income,Online Student,Venmo
+TX047,CUST002,2024-01-26,28000,D,Wire,International_Wire,Investment Portfolio,Wealth Manager,Goldman Sachs
+TX048,CUST003,2024-01-26,7200,D,Wire,NRISR,Vendor Payment,Singapore Supplier,DBS Bank
+TX049,CUST004,2024-01-27,2800,D,Branch,Domestic,Healthcare Insurance,NHS Private,Bupa
+TX050,CUST005,2024-01-27,18,C,Online,Domestic,Small Job Payment,Airtasker,Stripe
+TX051,CUST006,2024-01-28,6800,D,Wire,International_Wire,Vacation Booking,Hotel Chain,Marriott Bank
+TX052,CUST007,2024-01-28,11500,D,Wire,International_Wire,Import Goods Payment,Chinese Supplier,Bank of China
+TX053,CUST008,2024-01-29,4200,D,Wire,NRISR,Family Gift Transfer,Family Member,ICICI Bank India
+TX054,CUST009,2024-01-29,21000,D,Wire,International_Wire,Machinery Purchase,German Manufacturer,Deutsche Bank
+TX055,CUST010,2024-01-30,3100,D,Wire,International_Wire,Research Software License,Microsoft Education,Microsoft
+TX056,CUST011,2024-01-30,2400,D,Branch,Domestic,Medical Treatment,Private Doctor,Self Pay
+TX057,CUST012,2024-01-31,10800,D,Wire,International_Wire,Stock Market Investment,Trading Platform,Interactive Brokers
+TX058,CUST013,2024-01-31,5600,D,Wire,NRISR,Business Travel Expense,Travel Agency India,MakeMyTrip
+TX059,CUST014,2024-02-01,520,D,ATM,ATM,Cash Withdrawal,Self,ATM Network
+TX060,CUST015,2024-02-01,8900,D,Wire,International_Wire,Mortgage EMI Payment,Mortgage Lender,Nationwide
+TX061,CUST016,2024-02-02,7200,D,Wire,International_Wire,Semester Fee Payment,Imperial College London,Barclays UK
+TX062,CUST017,2024-02-02,28500,D,Wire,International_Wire,Bitcoin Purchase,Binance Exchange,Binance
+TX063,CUST018,2024-02-03,3100,D,Branch,Domestic,Fixed Deposit Addition,Self,Barclays UK
+TX064,CUST019,2024-02-03,12400,D,Wire,NRISR,Business Investment,Dubai Business,Emirates NBD
+TX065,CUST020,2024-02-04,4800,D,Wire,International_Wire,Professional License Renewal,Regulatory Body,Government Bank
+TX066,CUST002,2024-02-05,45000,D,Wire,International_Wire,Property Purchase Down Payment,Estate Agent,Savills Bank
+TX067,CUST003,2024-02-06,950,D,ATM,ATM,Cash Withdrawal,Self,ATM Network
+TX068,CUST007,2024-02-07,13200,D,Wire,International_Wire,Business Expansion Payment,Equipment Vendor,Citibank
+TX069,CUST009,2024-02-08,19500,D,Wire,International_Wire,Raw Materials Purchase,European Supplier,BNP Paribas
+TX070,CUST012,2024-02-09,11500,D,Wire,International_Wire,Portfolio Rebalancing,Investment Firm,Fidelity
+TX071,CUST017,2024-02-10,38000,D,Wire,International_Wire,Ethereum Purchase,Kraken Exchange,Kraken
+TX072,CUST002,2024-02-11,18000,D,Wire,International_Wire,Overseas Property Investment,Property Developer,HSBC Hong Kong
+TX073,CUST006,2024-02-12,120000,C,Wire,Domestic,Annual Bonus,Employer Corporation,HSBC UK
+TX074,CUST008,2024-02-13,95000,C,Wire,Domestic,Annual Salary,Tech Company,Barclays UK
+TX075,CUST012,2024-02-14,135000,C,Wire,Domestic,Year End Bonus,Financial Services Firm,JP Morgan
+TX076,CUST015,2024-02-15,105000,C,Wire,Domestic,Annual Compensation,Consulting Firm,KPMG Bank
+TX077,CUST019,2024-02-16,145000,C,Wire,Domestic,Executive Bonus,Multinational Corp,Citibank UK
+TX078,CUST001,2024-02-17,6100,D,Wire,International_Wire,Second Semester Tuition,University of Oxford,Barclays UK
+TX079,CUST005,2024-02-18,2200,D,Wire,International_Wire,Course Registration Fee,Cambridge University,NatWest
+TX080,CUST010,2024-02-19,3600,D,Wire,International_Wire,Lab Equipment Fee,Imperial College,HSBC UK

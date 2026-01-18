@@ -1,0 +1,21 @@
+customer_id,customer_name,customer_type,occupation,annual_income,account_type,risk_score
+CUST001,John Mitchell,Retail,Student,8000,Savings,5
+CUST002,Sarah Thompson,Retail,Salaried,125000,Current,3
+CUST003,Michael Chen,Retail,Self-employed,95000,Business,12
+CUST004,Emily Rodriguez,Retail,Retired,45000,Savings,8
+CUST005,David Kumar,Retail,Student,5000,Savings,4
+CUST006,Lisa Anderson,Retail,Salaried,85000,Current,6
+CUST007,James Wilson,Retail,Self-employed,150000,Business,15
+CUST008,Maria Garcia,Retail,Salaried,72000,Current,5
+CUST009,Robert Taylor,Retail,Business,180000,Business,18
+CUST010,Jennifer Lee,Retail,Student,6000,Savings,7
+CUST011,William Brown,Retail,Retired,38000,Savings,9
+CUST012,Patricia Davis,Retail,Salaried,105000,Current,4
+CUST013,Christopher Moore,Retail,Self-employed,88000,Business,11
+CUST014,Linda Johnson,Retail,Housewife,25000,Savings,6
+CUST015,Daniel White,Retail,Salaried,95000,Current,5
+CUST016,Karen Martinez,Retail,Student,7500,Savings,8
+CUST017,Matthew Harris,Retail,Business,220000,Business,20
+CUST018,Nancy Clark,Retail,Retired,52000,Savings,7
+CUST019,Paul Lewis,Retail,Salaried,115000,Current,4
+CUST020,Betty Walker,Retail,Self-employed,78000,Business,10

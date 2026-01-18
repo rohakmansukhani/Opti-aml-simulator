@@ -1,0 +1,417 @@
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from sqlalchemy.orm import Session
+from database import get_db
+from services.data_ingestion import DataIngestionService
+from models import Transaction, DataUpload
+from core.upload_validator import UploadValidator
+from core.ttl_manager import TTLManager
+import pandas as pd
+import io
+
+router = APIRouter(prefix="/api/data", tags=["Data"])
+
+@router.post("/upload/transactions")
+async def upload_transactions(
+    file: UploadFile = File(...),
+    force_replace: bool = False,  # Query param to force replacement
+    db: Session = Depends(get_db)
+):
+    if not file.filename.endswith(('.csv', '.xls', '.xlsx')):
+        raise HTTPException(400, "Only CSV and Excel files are supported")
+    
+    content = await file.read()
+    service = DataIngestionService()
+    
+    try:
+        valid_records, errors = service.process_transactions_csv(content, file.filename)
+    except Exception as e:
+         raise HTTPException(400, str(e))
+    
+    # Convert to DataFrame for validation
+    if valid_records:
+        df = pd.DataFrame(valid_records)
+        
+        # SIZE VALIDATION
+        validation = UploadValidator.validate_size(df, "transactions")
+        if not validation["allowed"]:
+            raise HTTPException(413, detail={
+                "error": "dataset_too_large",
+                "count": validation["count"],
+                "max_allowed": validation["max_allowed"],
+                "message": validation["message"],
+                "recommendation": "connect_external_db"
+            })
+        
+        # CHECK FOR EXISTING DATA
+        from sqlalchemy import text
+        from datetime import datetime
+        
+        existing_upload = db.execute(
+            text("""
+                SELECT upload_id, expires_at, record_count_transactions, filename
+                FROM data_uploads 
+                WHERE status = 'active' 
+                AND expires_at > :now
+                ORDER BY upload_timestamp DESC
+                LIMIT 1
+            """),
+            {"now": datetime.utcnow()}
+        ).fetchone()
+        
+        if existing_upload and not force_replace:
+            upload_id, expires_at, existing_count, existing_filename = existing_upload
+            
+            # If same file and similar count, extend TTL instead of replacing
+            if existing_filename == file.filename and abs(existing_count - len(valid_records)) < 10:
+                # Extend TTL by 24 hours
+                TTLManager.extend_ttl(db, upload_id, additional_hours=24)
+                
+                return {
+                    "status": "extended",
+                    "message": "Existing data found. TTL extended by 24 hours.",
+                    "upload_id": str(upload_id),
+                    "expires_at": (expires_at + pd.Timedelta(hours=24)).isoformat(),
+                    "records_count": existing_count,
+                    "action": "ttl_extended"
+                }
+            else:
+                # Different data - warn user
+                raise HTTPException(409, detail={
+                    "error": "existing_data_conflict",
+                    "message": f"Active data exists (expires: {expires_at.isoformat()}). Use force_replace=true to replace.",
+                    "existing_upload_id": str(upload_id),
+                    "expires_at": expires_at.isoformat(),
+                    "existing_filename": existing_filename,
+                    "existing_count": existing_count,
+                    "new_count": len(valid_records),
+                    "suggestion": "Add ?force_replace=true to URL to replace existing data"
+                })
+        
+        # CREATE NEW UPLOAD (if no conflict or force_replace=true)
+        upload_id = TTLManager.create_upload_record(
+            db=db,
+            user_id=None,  # TODO: Get from auth context
+            filename=file.filename,
+            txn_count=len(valid_records),
+            cust_count=0,
+            schema_snapshot={"columns": list(df.columns)},
+            ttl_hours=48
+        )
+        
+        expires_at = TTLManager.set_expiry(48)
+        
+        # Add TTL fields to records
+        for record in valid_records:
+            record['upload_id'] = upload_id
+            record['expires_at'] = expires_at
+        
+        try:
+            # Clear existing data only if force_replace or no existing data
+            from models import Alert
+            db.query(Alert).delete()
+            db.query(Transaction).delete()
+            db.flush()
+            
+            db.bulk_insert_mappings(Transaction, valid_records)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(400, f"Database error: {str(e)}")
+    
+    return {
+        "status": "success",
+        "records_uploaded": len(valid_records),
+        "errors": len(errors),
+        "error_sample": errors[:5] if errors else [],
+        "upload_id": upload_id if valid_records else None,
+        "expires_at": expires_at.isoformat() if valid_records else None,
+        "action": "new_upload"
+    }
+
+@router.get("/schema")
+async def get_data_schema(db: Session = Depends(get_db)):
+    """
+    Returns the schema (columns) for Transactions and Customers by introspecting the current database.
+    """
+    from sqlalchemy import inspect
+    
+    engine = db.get_bind()
+    inspector = inspect(engine)
+    
+    schema_response = {"transactions": [], "customers": []}
+
+    # Map SQL types to UI types
+    def map_type(sql_type):
+        s = str(sql_type).lower()
+        if 'int' in s:
+            return 'integer'
+        if 'numeric' in s or 'float' in s or 'real' in s or 'decimal' in s:
+            return 'float'
+        if 'datetime' in s or 'timestamp' in s:
+            return 'datetime'
+        if 'date' in s:
+            return 'date'
+        return 'string'
+
+    
+    # Filter out internal/system columns
+    IGNORED_COLUMNS = {'created_at', 'updated_at', 'id', 'metadata', 'hash_key', 'run_id'}
+
+    if inspector.has_table('transactions'):
+        cols = inspector.get_columns('transactions')
+        schema_response["transactions"] = [
+            {
+                "name": col['name'], 
+                "type": map_type(col['type']), 
+                "label": col['name'].replace('_', ' ').title(),
+                "sql_type": str(col['type'])
+            }
+            for col in cols
+            if col['name'].lower() not in IGNORED_COLUMNS
+        ]
+    
+    if inspector.has_table('customers'):
+        cols = inspector.get_columns('customers')
+        schema_response["customers"] = [
+            {
+                "name": col['name'], 
+                "type": map_type(col['type']), 
+                "label": col['name'].replace('_', ' ').title(),
+                "sql_type": str(col['type'])
+            }
+            for col in cols
+            if col['name'].lower() not in IGNORED_COLUMNS
+        ]
+        
+    # Fallback to hardcoded if tables not found (e.g. initial empty sqlite)
+    # This prevents UI breaking before first upload
+    if not schema_response["transactions"] and not schema_response["customers"]:
+         return {
+            "transactions": [
+                {"name": "transaction_amount", "type": "number", "label": "Transaction Amount"},
+                {"name": "transaction_type", "type": "string", "label": "Transaction Type"},
+                {"name": "channel", "type": "string", "label": "Channel"},
+                {"name": "debit_credit_indicator", "type": "string", "label": "D/C Indicator"},
+                {"name": "transaction_narrative", "type": "string", "label": "Narrative"},
+                {"name": "beneficiary_name", "type": "string", "label": "Beneficiary Name"},
+                {"name": "beneficiary_bank", "type": "string", "label": "Beneficiary Bank"},
+                {"name": "transaction_date", "type": "date", "label": "Date"}
+            ],
+            "customers": [
+                {"name": "customer_type", "type": "string", "label": "Customer Type"},
+                {"name": "occupation", "type": "string", "label": "Occupation"},
+                {"name": "annual_income", "type": "number", "label": "Annual Income"},
+                {"name": "risk_score", "type": "number", "label": "Risk Score"},
+                {"name": "account_type", "type": "string", "label": "Account Type"}
+            ]
+        }
+
+    return schema_response
+
+@router.post("/upload/customers")
+async def upload_customers(
+    file: UploadFile = File(...),
+    force_replace: bool = False,  # Query param to force replacement
+    db: Session = Depends(get_db)
+):
+    if not file.filename.endswith(('.csv', '.xls', '.xlsx')):
+        raise HTTPException(400, "Only CSV and Excel files are supported")
+    
+    content = await file.read()
+    service = DataIngestionService()
+    try:
+        valid_records, errors = service.process_customers_csv(content, file.filename)
+    except Exception as e:
+        raise HTTPException(400, str(e))
+    
+    if valid_records:
+        from models import Customer
+        df = pd.DataFrame(valid_records)
+        
+        # SIZE VALIDATION
+        validation = UploadValidator.validate_size(df, "customers")
+        if not validation["allowed"]:
+            raise HTTPException(413, detail={
+                "error": "dataset_too_large",
+                "count": validation["count"],
+                "max_allowed": validation["max_allowed"],
+                "message": validation["message"],
+                "recommendation": "connect_external_db"
+            })
+        
+        # CHECK FOR EXISTING DATA
+        from sqlalchemy import text
+        from datetime import datetime
+        
+        existing_upload = db.execute(
+            text("""
+                SELECT upload_id, expires_at, record_count_customers, filename
+                FROM data_uploads 
+                WHERE status = 'active' 
+                AND expires_at > :now
+                ORDER BY upload_timestamp DESC
+                LIMIT 1
+            """),
+            {"now": datetime.utcnow()}
+        ).fetchone()
+        
+        if existing_upload and not force_replace:
+            upload_id, expires_at, existing_count, existing_filename = existing_upload
+            
+            # If same file and similar count, extend TTL instead of replacing
+            if existing_filename == file.filename and abs(existing_count - len(valid_records)) < 5:
+                # Extend TTL by 24 hours
+                TTLManager.extend_ttl(db, upload_id, additional_hours=24)
+                
+                return {
+                    "status": "extended",
+                    "message": "Existing data found. TTL extended by 24 hours.",
+                    "upload_id": str(upload_id),
+                    "expires_at": (expires_at + pd.Timedelta(hours=24)).isoformat(),
+                    "records_count": existing_count,
+                    "action": "ttl_extended"
+                }
+            else:
+                # Different data - warn user
+                raise HTTPException(409, detail={
+                    "error": "existing_data_conflict",
+                    "message": f"Active data exists (expires: {expires_at.isoformat()}). Use force_replace=true to replace.",
+                    "existing_upload_id": str(upload_id),
+                    "expires_at": expires_at.isoformat(),
+                    "existing_filename": existing_filename,
+                    "existing_count": existing_count,
+                    "new_count": len(valid_records),
+                    "suggestion": "Add ?force_replace=true to URL to replace existing data"
+                })
+        
+        # CREATE NEW UPLOAD (if no conflict or force_replace=true)
+        upload_id = TTLManager.create_upload_record(
+            db=db,
+            user_id=None,  # TODO: Get from auth context
+            filename=file.filename,
+            txn_count=0,
+            cust_count=len(valid_records),
+            schema_snapshot={"columns": list(df.columns)},
+            ttl_hours=48
+        )
+        
+        expires_at = TTLManager.set_expiry(48)
+        
+        # Add TTL fields to records
+        for record in valid_records:
+            record['upload_id'] = upload_id
+            record['expires_at'] = expires_at
+        
+        try:
+            # Clear existing data only if force_replace or no existing data
+            from models import Alert
+            db.query(Alert).delete()
+            db.query(Transaction).delete()
+            db.query(Customer).delete()
+            db.flush()
+            
+            db.bulk_insert_mappings(Customer, valid_records)
+            db.commit()
+        except Exception as e:
+            db.rollback()
+            raise HTTPException(400, f"Database error: {str(e)}")
+            
+    return {
+        "status": "success",
+        "records_uploaded": len(valid_records),
+        "errors": len(errors),
+        "upload_id": upload_id if valid_records else None,
+        "expires_at": expires_at.isoformat() if valid_records else None,
+        "action": "new_upload"
+    }
+
+@router.get("/values")
+async def get_field_values(
+    field: str,
+    search: str = "",
+    db: Session = Depends(get_db)
+):
+    """
+    Returns distinct values for a specific field to power UI autocomplete.
+    Searches both Transactions and Customers tables.
+    """
+    # Optimized: Try Querying Tables Directly
+    # Faster than introspecting schema on every keystroke
+    
+    potential_tables = ['transactions', 'customers']
+
+    for table in potential_tables:
+        try:
+            # Try to query the field from this table
+            # Case-insensitive search for better UX
+            sql = f"SELECT DISTINCT {field} FROM {table} WHERE lower(CAST({field} AS TEXT)) LIKE lower(:search) LIMIT 20"
+            query = text(sql)
+            
+            print(f"[DEBUG] Trying table: {table}, field: {field}, search: '{search}'")
+            print(f"[DEBUG] SQL: {sql}")
+            
+            result = db.execute(query, {"search": f"%{search}%"})
+            values = [row[0] for row in result.fetchall() if row[0] is not None]
+            
+            print(f"[DEBUG] Found {len(values)} values: {values[:5]}")
+            
+            # Return results if found, or if query succeeded (field exists in table)
+            # This handles both successful matches and empty search results
+            if values:
+                return {"values": values}
+            
+            # If query succeeded but no values, the field exists but search didn't match
+            # Try without search filter to see if field has any data
+            test_sql = f"SELECT DISTINCT {field} FROM {table} WHERE {field} IS NOT NULL LIMIT 1"
+            test_result = db.execute(text(test_sql))
+            if test_result.fetchone():
+                # Field exists and has data, but search didn't match
+                # Return empty for this specific search
+                print(f"[DEBUG] Field exists in {table} but search didn't match")
+                return {"values": []}
+            
+        except Exception as e:
+            # Column likely doesn't exist in this table, try next
+            # CRITICAL: Rollback the transaction to prevent "InFailedSqlTransaction" error
+            db.rollback()
+            print(f"[DEBUG] Error querying {table}.{field}: {e}")
+            continue
+            
+    print(f"[DEBUG] Field {field} not found in any table")
+    return {"values": []}
+
+@router.post("/ttl/extend")
+async def extend_ttl(
+    upload_id: str,
+    additional_hours: int = 24,
+    db: Session = Depends(get_db)
+):
+    """
+    Extend the TTL for uploaded data.
+    
+    Args:
+        upload_id: The upload ID to extend
+        additional_hours: Hours to add (default 24)
+    
+    Returns:
+        Success status and new expiry time
+    """
+    success = TTLManager.extend_ttl(db, upload_id, additional_hours)
+    
+    if not success:
+        raise HTTPException(404, "Upload not found")
+    
+    # Get updated expiry
+    from sqlalchemy import text
+    result = db.execute(
+        text("SELECT expires_at FROM data_uploads WHERE upload_id = :id"),
+        {"id": upload_id}
+    ).fetchone()
+    
+    return {
+        "status": "success",
+        "upload_id": upload_id,
+        "new_expires_at": result[0].isoformat() if result else None,
+        "hours_added": additional_hours
+    }
+
