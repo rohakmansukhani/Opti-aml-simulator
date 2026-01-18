@@ -53,14 +53,21 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 from fastapi.middleware.cors import CORSMiddleware
 
 # Production CORS configuration
-ALLOWED_ORIGINS = os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(",")
+# We split by comma and strip whitespace to be extra safe
+DEFAULT_ORIGINS = "http://localhost:3000,https://opti-aml-simulator.vercel.app"
+ALLOWED_ORIGINS = [
+    o.strip() for o in os.getenv("ALLOWED_ORIGINS", DEFAULT_ORIGINS).split(",")
+    if o.strip()
+]
 
+# Auto-allow Vercel preview/production URLs if they contain the specific patterns
 app.add_middleware(
     CORSMiddleware,
     allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["*"],
+    expose_headers=["*"], # Ensure custom headers like x-db-url are visible
 )
 
 # Request logging middleware
