@@ -421,6 +421,25 @@ class UniversalScenarioEngine:
         customers_subset = customers[customer_cols].copy()
         customers_subset = customers_subset.drop_duplicates(subset=['customer_id'])
         
+        # DEBUG: Check for duplicate columns BEFORE merge
+        print(f"[DEBUG] Transactions columns: {list(transactions.columns)}")
+        print(f"[DEBUG] Customers columns: {list(customers_subset.columns)}")
+        
+        # Check if transactions has duplicate customer_id columns
+        txn_customer_id_count = list(transactions.columns).count('customer_id')
+        cust_customer_id_count = list(customers_subset.columns).count('customer_id')
+        
+        if txn_customer_id_count > 1:
+            print(f"[ERROR] Transactions DataFrame has {txn_customer_id_count} 'customer_id' columns!")
+            # Drop duplicates, keeping first
+            transactions = transactions.loc[:, ~transactions.columns.duplicated()]
+            print(f"[FIX] Dropped duplicate columns. New columns: {list(transactions.columns)}")
+        
+        if cust_customer_id_count > 1:
+            print(f"[ERROR] Customers DataFrame has {cust_customer_id_count} 'customer_id' columns!")
+            customers_subset = customers_subset.loc[:, ~customers_subset.columns.duplicated()]
+            print(f"[FIX] Dropped duplicate columns. New columns: {list(customers_subset.columns)}")
+        
         # Perform left join
         merged = transactions.merge(
             customers_subset,
