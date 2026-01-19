@@ -32,6 +32,18 @@ def apply_field_mappings_to_df(df: pd.DataFrame, mappings: Optional[Dict[str, st
     rename_dict = {col: reverse_map[col] for col in df.columns if col in reverse_map}
     
     if rename_dict:
-        return df.rename(columns=rename_dict)
+        # Create a copy to avoid modifying original
+        df_mapped = df.copy()
+        
+        # Drop target columns if they already exist (to prevent duplicates)
+        target_cols = list(rename_dict.values())
+        existing_targets = [col for col in target_cols if col in df_mapped.columns]
+        if existing_targets:
+            print(f"[FIELD_MAPPER] Dropping existing columns to prevent duplicates: {existing_targets}")
+            df_mapped = df_mapped.drop(columns=existing_targets)
+        
+        # Now safely rename
+        df_mapped = df_mapped.rename(columns=rename_dict)
+        return df_mapped
         
     return df
