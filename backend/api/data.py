@@ -420,6 +420,7 @@ async def get_field_values(
     Queries raw_data JSONB from both Transactions and Customers tables.
     """
     user_id = user_payload.get("sub")
+    print(f"[VALUES] Searching field='{field}', search='{search}', user_id='{user_id}'")
     potential_tables = ['transactions', 'customers']
 
     for table in potential_tables:
@@ -437,13 +438,17 @@ async def get_field_values(
             json_result = db.execute(text(json_sql), {"field_name": field, "search": f"%{search}%", "user_id": user_id})
             json_values = [row[0] for row in json_result.fetchall() if row[0] is not None]
 
+            print(f"[VALUES] Found {len(json_values)} values in {table}: {json_values}")
+            
             if json_values:
                 return {"values": json_values}
                 
         except Exception as e:
+            print(f"[VALUES] Error querying {table}: {e}")
             db.rollback()
             continue
             
+    print(f"[VALUES] No values found, returning empty array")
     return {"values": []}
 
 @router.post("/ttl/extend")
