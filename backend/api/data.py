@@ -415,36 +415,22 @@ async def get_field_values(
     user_payload: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
-    user_id = user_payload.get("sub")
     """
     Returns distinct values for a specific field to power UI autocomplete.
-    Searches both Transactions and Customers tables.
+    Queries raw_data JSONB from both Transactions and Customers tables.
     """
+    user_id = user_payload.get("sub")
     potential_tables = ['transactions', 'customers']
 
     for table in potential_tables:
         try:
-            # 1. TRY DIRECT COLUMN QUERY
-            sql = f"""
-                SELECT DISTINCT t.{field} 
-                FROM {table} t
-                JOIN data_uploads du ON t.upload_id = du.upload_id
-                WHERE du.user_id = :user_id 
-                AND lower(CAST(t.{field} AS TEXT)) LIKE lower(:search) 
-                LIMIT 20
-            """
-            result = db.execute(text(sql), {"search": f"%{search}%", "user_id": user_id})
-            values = [row[0] for row in result.fetchall() if row[0] is not None]
-            
-            if values:
-                return {"values": values}
-
-            # 2. TRY JSONB raw_data QUERY (if column query returned nothing or we want to search flexible fields)
+            # Query JSONB raw_data directly (schema-agnostic)
             json_sql = f"""
                 SELECT DISTINCT t.raw_data ->> :field_name
                 FROM {table} t
                 JOIN data_uploads du ON t.upload_id = du.upload_id
                 WHERE du.user_id = :user_id 
+                AND t.raw_data ? :field_name
                 AND lower(t.raw_data ->> :field_name) LIKE lower(:search)
                 LIMIT 20
             """
@@ -454,35 +440,7 @@ async def get_field_values(
             if json_values:
                 return {"values": json_values}
                 
-            # If query succeeded but no values, check if field has ANY data for THIS user
-            test_sql = f"""
-                SELECT 1 FROM {table} t 
-                JOIN data_uploads du ON t.upload_id = du.upload_id
-                WHERE du.user_id = :user_id LIMIT 1
-            """
-            test_result = db.execute(text(test_sql), {"user_id": user_id})
-            if test_result.fetchone():
-                return {"values": []}
-            
         except Exception as e:
-            # Column might not exist in this table, try JSONB approach immediately as fallback
-            try:
-                # Same JSONB query as above but specifically for when the main column is missing
-                json_sql = f"""
-                    SELECT DISTINCT t.raw_data ->> :field_name
-                    FROM {table} t
-                    JOIN data_uploads du ON t.upload_id = du.upload_id
-                    WHERE du.user_id = :user_id 
-                    AND lower(t.raw_data ->> :field_name) LIKE lower(:search)
-                    LIMIT 20
-                """
-                json_result = db.execute(text(json_sql), {"field_name": field, "search": f"%{search}%", "user_id": user_id})
-                json_values = [row[0] for row in json_result.fetchall() if row[0] is not None]
-                if json_values:
-                    return {"values": json_values}
-            except:
-                db.rollback()
-            
             db.rollback()
             continue
             
