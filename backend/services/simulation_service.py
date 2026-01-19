@@ -3,7 +3,7 @@ import pandas as pd
 from datetime import datetime
 import uuid
 from typing import List, Dict, Set, Optional
-from contextlib import contextmanager
+
 
 # Models
 from models import SimulationRun, Alert, Transaction, Customer, ScenarioConfig, AlertExclusionLog
@@ -11,17 +11,6 @@ from models import SimulationRun, Alert, Transaction, Customer, ScenarioConfig, 
 from core.universal_engine import UniversalScenarioEngine
 from core.config_models import ScenarioConfigModel
 from core.field_mapper import apply_field_mappings_to_df
-
-@contextmanager
-def timeout(seconds):
-    """
-    Timeout context manager for background tasks.
-    Note: signal.alarm doesn't work in background threads, so we use a simple pass-through.
-    For production, consider using asyncio.wait_for or threading.Timer with task cancellation.
-    """
-    # Simply yield without timeout enforcement in background threads
-    # The FastAPI background task system handles overall request timeouts
-    yield
 
 
 class SimulationService:
@@ -96,17 +85,28 @@ class SimulationService:
         # Extract raw_data into a temporary DataFrame
         meta_df = pd.json_normalize(df['raw_data'])
         
-        # Only add columns that don't already exist in the main DataFrame
-        # This prevents metadata from overwriting explicitly mapped system columns
-        cols_to_add = [c for c in meta_df.columns if c not in df.columns]
+        if meta_df.empty:
+            return df.drop(columns=['raw_data'])
         
-        if not meta_df.empty and cols_to_add:
-            # Concat the new columns
-            df = pd.concat([df.drop(columns=['raw_data']), meta_df[cols_to_add]], axis=1)
-        else:
-            df = df.drop(columns=['raw_data'])
-            
-        return df
+        # Drop 'raw_data' column from main DataFrame
+        df_clean = df.drop(columns=['raw_data'])
+        
+        # For columns that exist in BOTH DataFrames, prefer raw_data (it has the actual CSV data)
+        # For columns only in meta_df, add them
+        # For columns only in df_clean, keep them
+        
+        # Identify overlapping columns
+        overlap_cols = [c for c in meta_df.columns if c in df_clean.columns]
+        
+        if overlap_cols:
+            print(f"[DATA_FLATTEN] Dropping duplicate columns from DB query: {overlap_cols}")
+            # Drop overlapping columns from df_clean, keep raw_data version
+            df_clean = df_clean.drop(columns=overlap_cols)
+        
+        # Concatenate: df_clean (system columns) + meta_df (all CSV data)
+        result = pd.concat([df_clean, meta_df], axis=1)
+        
+        return result
 
     def load_simulation_data(self, user_id: str):
         """
@@ -260,15 +260,10 @@ class SimulationService:
                          current_txns = apply_field_mappings_to_df(current_txns, config_record.field_mappings)
                          current_cust = apply_field_mappings_to_df(current_cust, config_record.field_mappings)
 
-                    # Run Engine with Timeout (Gap 4)
-                    with timeout(300): # 5 Minutes per scenario
-                        alerts = engine.execute(scenario_config, current_txns, current_cust, run_id)
-                        all_alerts.extend(alerts)
+                    # Run Engine
+                    alerts = engine.execute(scenario_config, current_txns, current_cust, run_id)
+                    all_alerts.extend(alerts)
                     
-                except TimeoutError as te:
-                    print(f"Scenario {scenario_id} timed out: {te}")
-                    # Log as metadata error but continue
-                    continue
                 except Exception as e:
                     print(f"Error executing scenario {scenario_id}: {e}")
                     import traceback
