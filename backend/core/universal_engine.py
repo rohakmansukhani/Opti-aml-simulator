@@ -416,7 +416,10 @@ class UniversalScenarioEngine:
         
         # Only select required customer columns + customer_id for join
         customer_cols = ['customer_id'] + [f for f in required_fields if f in customers.columns]
+        
+        # Deduplicate customers by customer_id to prevent merge explosion
         customers_subset = customers[customer_cols].copy()
+        customers_subset = customers_subset.drop_duplicates(subset=['customer_id'])
         
         # Perform left join
         merged = transactions.merge(
