@@ -69,15 +69,31 @@ async def get_current_user_token(request: Request):
     
     # 4. Verify & Decode
     try:
+        # Construct key using the matching key data from JWKS
         public_key = jwk.construct(key_data)
+        
+        # Use the algorithm specified in the token header, defaulting to RS256
+        # Supabase often uses ES256
+        alg = headers.get("alg", "RS256")
+        
         payload = jwt.decode(
             token, 
             public_key.to_pem().decode("utf-8"), 
-            algorithms=[headers.get("alg", "RS256")],
-            options={"verify_aud": False} 
+            algorithms=[alg],
+            options={
+                "verify_aud": False,
+                "verify_sub": True,
+                "verify_iat": True,
+                "verify_exp": True
+            } 
         )
         return payload, token
+    except jwt.ExpiredSignatureError:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Token has expired")
+    except jwt.JWTClaimsError as e:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Invalid token claims: {str(e)}")
     except Exception as e:
+        print(f"JWT Verification Error Details: {str(e)}")
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Token Verification Failed: {str(e)}")
 
 async def get_current_user(request: Request):
