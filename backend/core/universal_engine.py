@@ -82,6 +82,27 @@ class FilterProcessor:
         # Normalize operator
         op = str(operator).lower() if operator else ''
         
+        # SAFE TYPE CASTING
+        # Ensure 'value' matches the column's dtype
+        target_dtype = df[field].dtype
+        
+        try:
+            if np.issubdtype(target_dtype, np.number):
+                if isinstance(value, list):
+                    value = [float(v) for v in value]
+                else:
+                    value = float(value)
+            elif np.issubdtype(target_dtype, np.datetime64):
+                if isinstance(value, list):
+                    value = [pd.to_datetime(v) for v in value]
+                else:
+                    value = pd.to_datetime(value)
+            # Else keep as is (string/object)
+        except Exception:
+            # If casting fails, we might just proceed (pandas might handle it or error later)
+            # But usually it's better to just log and try
+            pass
+
         # Apply Logic
         if op in ['==', 'equals']:
             return df[df[field] == value]

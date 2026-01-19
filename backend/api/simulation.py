@@ -273,7 +273,28 @@ async def preview_scenario(
         if not txns:
              return {"status": "no_data", "message": "No transactions found for your account. Please upload data first."}
         
-        # Convert to DataFrame
+        # Determine customers involved in these transactions
+        customer_ids = {t.customer_id for t in txns}
+        
+        # Load associated customers
+        from models import Customer
+        customers_orm = db.query(Customer).filter(
+            Customer.customer_id.in_(customer_ids),
+            Customer.upload_id.in_([t.upload_id for t in txns]) # Ensure same upload scope
+        ).all()
+        
+        # Convert Customers to DataFrame
+        customers_df = pd.DataFrame([{
+            'customer_id': c.customer_id,
+            'customer_name': c.customer_name,
+            'occupation': c.occupation,
+            'annual_income': float(c.annual_income) if c.annual_income else 0,
+            'risk_score': float(c.risk_score) if c.risk_score else 0,
+            'customer_type': c.customer_type,
+            'residence_country': c.residence_country
+        } for c in customers_orm])
+        
+        # Convert Transactions to DataFrame
         df = pd.DataFrame([{
             'transaction_id': t.transaction_id,
             'customer_id': t.customer_id,
@@ -313,8 +334,8 @@ async def preview_scenario(
             # Reraise for now to catching validation errors.
             raise ValueError(f"Invalid Config: {e}")
 
-        # Execute on sample (Empty customers DF for now, or fetch if needed)
-        alerts = engine.execute(scenario, df, pd.DataFrame(), 'PREVIEW')
+        # Execute on sample with partial customer data
+        alerts = engine.execute(scenario, df, customers_df, 'PREVIEW')
         
         estimated_monthly = int((len(alerts) / 30) * 30) # Rough estimate on 1000 rows? 
         # Better estimate: (alerts / days_in_sample) * 30
