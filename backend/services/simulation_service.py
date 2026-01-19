@@ -79,32 +79,35 @@ class SimulationService:
         return run
 
     def _flatten_raw_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        """
+        Extracts raw_data JSONB into DataFrame columns.
+        
+        With the simplified schema, the database only has system columns.
+        ALL user CSV fields come from raw_data JSONB.
+        
+        Args:
+            df: DataFrame from SQL query with system columns + raw_data
+            
+        Returns:
+            DataFrame with system columns + all CSV fields from raw_data
+        """
         if df.empty or 'raw_data' not in df.columns:
             return df
         
-        # Extract raw_data into a temporary DataFrame
+        # Extract raw_data JSONB into columns
         meta_df = pd.json_normalize(df['raw_data'])
         
         if meta_df.empty:
             return df.drop(columns=['raw_data'])
         
-        # Drop 'raw_data' column from main DataFrame
-        df_clean = df.drop(columns=['raw_data'])
+        # System columns to keep from database query
+        system_cols = ['customer_id', 'transaction_id', 'upload_id', 'created_at', 'expires_at']
+        df_system = df[[col for col in system_cols if col in df.columns]]
         
-        # For columns that exist in BOTH DataFrames, prefer raw_data (it has the actual CSV data)
-        # For columns only in meta_df, add them
-        # For columns only in df_clean, keep them
+        # Combine: system columns (from DB) + user data (from raw_data JSONB)
+        result = pd.concat([df_system, meta_df], axis=1)
         
-        # Identify overlapping columns
-        overlap_cols = [c for c in meta_df.columns if c in df_clean.columns]
-        
-        if overlap_cols:
-            print(f"[DATA_FLATTEN] Dropping duplicate columns from DB query: {overlap_cols}")
-            # Drop overlapping columns from df_clean, keep raw_data version
-            df_clean = df_clean.drop(columns=overlap_cols)
-        
-        # Concatenate: df_clean (system columns) + meta_df (all CSV data)
-        result = pd.concat([df_clean, meta_df], axis=1)
+        print(f"[DATA_FLATTEN] Loaded {len(meta_df.columns)} fields from raw_data")
         
         return result
 

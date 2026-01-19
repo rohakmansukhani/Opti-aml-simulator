@@ -10,45 +10,42 @@ def utc_now():
     return datetime.now(timezone.utc)
 
 class Transaction(Base):
+    """
+    Schema-agnostic transaction model.
+    All user CSV data is stored in raw_data JSONB.
+    """
     __tablename__ = "transactions"
     
+    # System columns only
     transaction_id = Column(String, primary_key=True)
     customer_id = Column(String, ForeignKey("customers.customer_id"), nullable=False, index=True)
-    account_number = Column(String)
-    transaction_date = Column(DateTime(timezone=True), nullable=False, index=True)  # UTC
-    transaction_amount = Column(DECIMAL(15, 2), nullable=True)
-    debit_credit_indicator = Column(String(10))
-    transaction_type = Column(String)
-    channel = Column(String)
-    transaction_narrative = Column(Text)
-    beneficiary_name = Column(String)
-    beneficiary_bank = Column(String)
-    raw_data = Column(JSON, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)  # UTC
-    
-    # TTL Support
     upload_id = Column(UUID(as_uuid=True), ForeignKey("data_uploads.upload_id"), nullable=True, index=True)
-    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)  # UTC
+    created_at = Column(DateTime(timezone=True), default=utc_now)  # UTC
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)  # UTC (TTL)
+    
+    # All user CSV data stored here
+    raw_data = Column(JSON, nullable=False, default={})
 
+    # Relationships
     customer = relationship("Customer", back_populates="transactions")
 
 class Customer(Base):
+    """
+    Schema-agnostic customer model.
+    All user CSV data is stored in raw_data JSONB.
+    """
     __tablename__ = "customers"
 
+    # System columns only
     customer_id = Column(String, primary_key=True)
-    customer_name = Column(String, nullable=True)
-    customer_type = Column(String)
-    occupation = Column(String)
-    annual_income = Column(DECIMAL(15, 2))
-    account_type = Column(String)
-    risk_score = Column(Integer)
-    raw_data = Column(JSON, nullable=True)
-    created_at = Column(DateTime(timezone=True), default=utc_now)  # UTC
-    
-    # TTL Support
     upload_id = Column(UUID(as_uuid=True), ForeignKey("data_uploads.upload_id"), nullable=True, index=True)
-    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)  # UTC
+    created_at = Column(DateTime(timezone=True), default=utc_now)  # UTC
+    expires_at = Column(DateTime(timezone=True), nullable=True, index=True)  # UTC (TTL)
+    
+    # All user CSV data stored here
+    raw_data = Column(JSON, nullable=False, default={})
 
+    # Relationships
     transactions = relationship("Transaction", back_populates="customer")
     alerts = relationship("Alert", back_populates="customer")
 
