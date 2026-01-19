@@ -403,14 +403,24 @@ export default function Dashboard() {
                     {runDialog.step === 'SELECT' && (
                         <>
                             <Button onClick={() => setRunDialog({ ...runDialog, open: false })}>Cancel</Button>
-                            <Button
-                                variant="contained"
-                                onClick={() => setRunDialog(p => ({ ...p, step: 'CONFIG' }))}
-                                disabled={selectedScenarios.length === 0}
-                                className="bg-blue-600 text-white hover:bg-blue-700 disabled:bg-slate-300"
-                            >
-                                Next
-                            </Button>
+                            <div className="flex flex-col items-end">
+                                <Button
+                                    variant="contained"
+                                    onClick={() => setRunDialog(p => ({ ...p, step: 'CONFIG' }))}
+                                    disabled={selectedScenarios.length === 0}
+                                    className={`
+                                        transition-colors
+                                        ${selectedScenarios.length === 0
+                                            ? '!bg-slate-200 !text-slate-400'
+                                            : 'bg-blue-600 text-white hover:bg-blue-700'}
+                                    `}
+                                >
+                                    Next
+                                </Button>
+                                {selectedScenarios.length === 0 && (
+                                    <span className="text-[10px] text-red-500 mt-1 font-medium">Select a rule</span>
+                                )}
+                            </div>
                         </>
                     )}
                     {runDialog.step === 'CONFIG' && (
