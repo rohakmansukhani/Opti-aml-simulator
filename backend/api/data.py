@@ -162,7 +162,7 @@ async def upload_transactions(
 @router.get("/schema")
 async def get_data_schema(
     db: Session = Depends(get_db),
-    user_id: str = Depends(get_current_user_id)
+    current_user: dict = Depends(get_current_user)
 ):
     """
     Returns the schema (columns) for Transactions and Customers by extracting field names
@@ -172,6 +172,8 @@ async def get_data_schema(
     from the uploaded CSV data rather than relying on fixed database columns.
     """
     from models import Transaction, Customer, DataUpload
+    
+    user_id = current_user.get('sub')  # Extract user_id from JWT payload
     
     schema_response = {"transactions": [], "customers": []}
     
