@@ -118,11 +118,21 @@ async def start_simulation(
     return {"run_id": run.run_id, "status": "pending"}
 
 @router.get("/{run_id}/status")
-async def get_status(run_id: str, db: Session = Depends(get_db)):
+async def get_status(
+    run_id: str, 
+    user_data: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
     from models import SimulationRun
-    run = db.query(SimulationRun).filter(SimulationRun.run_id == run_id).first()
+    user_id = user_data.get("sub")
+    
+    run = db.query(SimulationRun).filter(
+        SimulationRun.run_id == run_id,
+        SimulationRun.user_id == user_id
+    ).first()
+    
     if not run:
-        raise HTTPException(404, "Run not found")
+        raise HTTPException(404, "Run not found or access denied")
     return {
         "run_id": run.run_id,
         "status": run.status,
@@ -170,14 +180,43 @@ async def list_simulation_runs(
     return results
 
 @router.get("/{run_id}/alerts")
-async def get_run_alerts(run_id: str, db: Session = Depends(get_db)):
-    from models import Alert
+async def get_run_alerts(
+    run_id: str, 
+    user_data: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from models import Alert, SimulationRun
+    user_id = user_data.get("sub")
+    
+    # Verify ownership
+    run_exists = db.query(SimulationRun).filter(
+        SimulationRun.run_id == run_id,
+        SimulationRun.user_id == user_id
+    ).first()
+    
+    if not run_exists:
+        raise HTTPException(404, "Run not found or access denied")
+        
     alerts = db.query(Alert).filter(Alert.run_id == run_id).all()
     return alerts
 
 @router.get("/{run_id}/export/excel")
-async def export_run_results(run_id: str, db: Session = Depends(get_db)):
-    from models import Alert
+async def export_run_results(
+    run_id: str, 
+    user_data: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    from models import Alert, SimulationRun
+    user_id = user_data.get("sub")
+    
+    # Verify ownership
+    run_exists = db.query(SimulationRun).filter(
+        SimulationRun.run_id == run_id,
+        SimulationRun.user_id == user_id
+    ).first()
+    
+    if not run_exists:
+        raise HTTPException(404, "Run not found or access denied")
     
     # Query alerts using pandas
     alerts_query = db.query(Alert).filter(Alert.run_id == run_id)
@@ -221,13 +260,18 @@ async def preview_scenario(
     from core.config_models import ScenarioConfigModel
 
     try:
-        # Load last 1000 transactions via ORM (Database Agnostic)
-        txns = db.query(Transaction).order_by(
+        from models import DataUpload
+        user_id = user_data.get("sub")
+        
+        # Load last 1000 transactions via ORM (Scoped to User)
+        txns = db.query(Transaction).join(DataUpload).filter(
+            DataUpload.user_id == user_id
+        ).order_by(
             Transaction.transaction_date.desc()
         ).limit(1000).all()
         
         if not txns:
-             return {"status": "no_data", "message": "Transaction table is empty."}
+             return {"status": "no_data", "message": "No transactions found for your account. Please upload data first."}
         
         # Convert to DataFrame
         df = pd.DataFrame([{

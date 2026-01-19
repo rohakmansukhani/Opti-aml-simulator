@@ -92,6 +92,20 @@ async def get_run_metadata(
     """
     Get metadata for a simulation run.
     """
+    user_id = user_data.get("sub")
+    
+    # Verify ownership
+    run = db.query(SimulationRun).filter(
+        SimulationRun.run_id == run_id,
+        SimulationRun.user_id == user_id
+    ).first()
+    
+    if not run:
+         raise HTTPException(
+                status_code=404,
+                detail=f"Run {run_id} not found or access denied"
+            )
+
     try:
         engine = ComparisonEngine(db)
         metadata = engine.get_run_metadata(run_id)
@@ -99,7 +113,7 @@ async def get_run_metadata(
         if not metadata:
             raise HTTPException(
                 status_code=404,
-                detail=f"Run {run_id} not found"
+                detail=f"Run {run_id} metadata not found"
             )
         
         return metadata

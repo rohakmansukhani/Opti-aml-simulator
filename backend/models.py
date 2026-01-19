@@ -9,16 +9,17 @@ class Transaction(Base):
     __tablename__ = "transactions"
     
     transaction_id = Column(String, primary_key=True)
-    customer_id = Column(String, ForeignKey("customers.customer_id"), nullable=False, index=True)
+    customer_id = Column(String, ForeignKey("customers.customer_id"), nullable=True, index=True)
     account_number = Column(String)
-    transaction_date = Column(DateTime, nullable=False, index=True)
-    transaction_amount = Column(DECIMAL(15, 2), nullable=False)
-    debit_credit_indicator = Column(String(1))  # 'D' or 'C'
+    transaction_date = Column(DateTime, nullable=True, index=True)
+    transaction_amount = Column(DECIMAL(15, 2), nullable=True)
+    debit_credit_indicator = Column(String(10))  # Relaxed length
     transaction_type = Column(String)
     channel = Column(String)
     transaction_narrative = Column(Text)
     beneficiary_name = Column(String)
     beneficiary_bank = Column(String)
+    raw_data = Column(JSON, nullable=True) # Catch-all for extra columns
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     # TTL Support
@@ -31,12 +32,13 @@ class Customer(Base):
     __tablename__ = "customers"
 
     customer_id = Column(String, primary_key=True)
-    customer_name = Column(String, nullable=False)
+    customer_name = Column(String, nullable=True)
     customer_type = Column(String)
     occupation = Column(String)
     annual_income = Column(DECIMAL(15, 2))
     account_type = Column(String)
     risk_score = Column(Integer)
+    raw_data = Column(JSON, nullable=True) # Catch-all for extra columns
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     
     # TTL Support
@@ -126,6 +128,7 @@ class VerifiedEntity(Base):
     __tablename__ = "verified_entities"
     
     entity_id = Column(String, primary_key=True, default=lambda: str(uuid.uuid4()))
+    user_id = Column(String, ForeignKey("profiles.id"), index=True, nullable=True) # Scoped to Bank/User
     entity_name = Column(String, index=True)
     entity_type = Column(String) # University, FinancialInstitution, CryptoExchange
     country = Column(String)

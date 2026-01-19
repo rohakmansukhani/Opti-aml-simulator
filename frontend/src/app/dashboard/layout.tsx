@@ -71,12 +71,27 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                     })}
                 </nav>
 
-                <div className="p-4 border-t border-slate-100">
+                <div className="p-4 space-y-2 border-t border-slate-100">
+                    {/* User Profile Info */}
+                    <div className="flex items-center px-4 py-3 mb-2 bg-slate-50 rounded-xl border border-slate-100">
+                        <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-sm">
+                            {useSessionStore.getState().user?.email?.[0].toUpperCase() || 'U'}
+                        </div>
+                        <div className="ml-3 overflow-hidden">
+                            <div className="text-xs font-semibold text-slate-900 truncate">
+                                {useSessionStore.getState().user?.email || 'User'}
+                            </div>
+                            <div className="text-[10px] text-slate-500 uppercase tracking-wider font-medium">
+                                Active Account
+                            </div>
+                        </div>
+                    </div>
+
                     <button
-                        className="flex items-center w-full px-4 py-3 text-sm font-medium text-slate-600 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors"
+                        className="flex items-center w-full px-4 py-3 text-sm font-medium text-slate-600 hover:bg-red-50 hover:text-red-600 rounded-lg transition-colors group"
                         onClick={() => setShowDisconnectModal(true)}
                     >
-                        <LogOut size={20} className="mr-3" />
+                        <LogOut size={20} className="mr-3 text-slate-400 group-hover:text-red-500 transition-colors" />
                         Disconnect
                     </button>
                 </div>

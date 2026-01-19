@@ -32,19 +32,22 @@ async def get_dashboard_stats(
 ):
     user_id = user_payload.get("sub")
 
-    # 1. Transaction Count (Live Dataset)
-    tx_count = db.query(Transaction).count()
+    # 1. Transaction Count (Scoped to User)
+    from models import DataUpload
+    tx_count = db.query(Transaction).join(DataUpload).filter(DataUpload.user_id == user_id).count()
     
-    # 2. High Risk Alerts (Current Open)
-    high_risk_count = db.query(Alert).filter(
+    # 2. High Risk Alerts (Scoped to User)
+    high_risk_count = db.query(Alert).join(SimulationRun).filter(
+        SimulationRun.user_id == user_id,
         Alert.risk_classification == 'HIGH', 
         Alert.alert_status == 'OPN'
     ).count()
     
-    # 3. Recent Simulations
-    total_simulations = db.query(SimulationRun).count()
+    # 3. Recent Simulations (Scoped to User)
+    total_simulations = db.query(SimulationRun).filter(SimulationRun.user_id == user_id).count()
     
     recent_runs_db = db.query(SimulationRun)\
+        .filter(SimulationRun.user_id == user_id)\
         .order_by(SimulationRun.created_at.desc())\
         .limit(5)\
         .all()

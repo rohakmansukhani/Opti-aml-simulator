@@ -5,6 +5,7 @@ from services.data_ingestion import DataIngestionService
 from models import Transaction, DataUpload
 from core.upload_validator import UploadValidator
 from core.ttl_manager import TTLManager
+from auth import get_current_user
 import pandas as pd
 import io
 
@@ -14,8 +15,10 @@ router = APIRouter(prefix="/api/data", tags=["Data"])
 async def upload_transactions(
     file: UploadFile = File(...),
     force_replace: bool = False,  # Query param to force replacement
+    user_payload: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    user_id = user_payload.get("sub")
     if not file.filename.endswith(('.csv', '.xls', '.xlsx')):
         raise HTTPException(400, "Only CSV and Excel files are supported")
     
@@ -51,11 +54,12 @@ async def upload_transactions(
                 SELECT upload_id, expires_at, record_count_transactions, filename
                 FROM data_uploads 
                 WHERE status = 'active' 
+                AND user_id = :user_id
                 AND expires_at > :now
                 ORDER BY upload_timestamp DESC
                 LIMIT 1
             """),
-            {"now": datetime.utcnow()}
+            {"now": datetime.utcnow(), "user_id": user_id}
         ).fetchone()
         
         if existing_upload and not force_replace:
@@ -90,7 +94,7 @@ async def upload_transactions(
         # CREATE NEW UPLOAD (if no conflict or force_replace=true)
         upload_id = TTLManager.create_upload_record(
             db=db,
-            user_id=None,  # TODO: Get from auth context
+            user_id=user_id,
             filename=file.filename,
             txn_count=len(valid_records),
             cust_count=0,
@@ -106,10 +110,20 @@ async def upload_transactions(
             record['expires_at'] = expires_at
         
         try:
-            # Clear existing data only if force_replace or no existing data
-            from models import Alert
-            db.query(Alert).delete()
-            db.query(Transaction).delete()
+            # Clear existing data ONLY for the current user
+            from models import Alert, SimulationRun, DataUpload
+            
+            # Find all previous upload IDs for this user
+            prev_upload_ids = [u.upload_id for u in db.query(DataUpload.upload_id).filter(DataUpload.user_id == user_id).all()]
+            # Find all previous run IDs for this user
+            prev_run_ids = [r.run_id for r in db.query(SimulationRun.run_id).filter(SimulationRun.user_id == user_id).all()]
+            
+            if prev_run_ids:
+                db.query(Alert).filter(Alert.run_id.in_(prev_run_ids)).delete(synchronize_session=False)
+            
+            if prev_upload_ids:
+                db.query(Transaction).filter(Transaction.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+            
             db.flush()
             
             db.bulk_insert_mappings(Transaction, valid_records)
@@ -155,7 +169,7 @@ async def get_data_schema(db: Session = Depends(get_db)):
 
     
     # Filter out internal/system columns
-    IGNORED_COLUMNS = {'created_at', 'updated_at', 'id', 'metadata', 'hash_key', 'run_id'}
+    IGNORED_COLUMNS = {'created_at', 'updated_at', 'id', 'raw_data', 'hash_key', 'run_id'}
 
     if inspector.has_table('transactions'):
         cols = inspector.get_columns('transactions')
@@ -212,8 +226,10 @@ async def get_data_schema(db: Session = Depends(get_db)):
 async def upload_customers(
     file: UploadFile = File(...),
     force_replace: bool = False,  # Query param to force replacement
+    user_payload: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    user_id = user_payload.get("sub")
     if not file.filename.endswith(('.csv', '.xls', '.xlsx')):
         raise HTTPException(400, "Only CSV and Excel files are supported")
     
@@ -248,11 +264,12 @@ async def upload_customers(
                 SELECT upload_id, expires_at, record_count_customers, filename
                 FROM data_uploads 
                 WHERE status = 'active' 
+                AND user_id = :user_id
                 AND expires_at > :now
                 ORDER BY upload_timestamp DESC
                 LIMIT 1
             """),
-            {"now": datetime.utcnow()}
+            {"now": datetime.utcnow(), "user_id": user_id}
         ).fetchone()
         
         if existing_upload and not force_replace:
@@ -287,7 +304,7 @@ async def upload_customers(
         # CREATE NEW UPLOAD (if no conflict or force_replace=true)
         upload_id = TTLManager.create_upload_record(
             db=db,
-            user_id=None,  # TODO: Get from auth context
+            user_id=user_id,
             filename=file.filename,
             txn_count=0,
             cust_count=len(valid_records),
@@ -303,11 +320,21 @@ async def upload_customers(
             record['expires_at'] = expires_at
         
         try:
-            # Clear existing data only if force_replace or no existing data
-            from models import Alert
-            db.query(Alert).delete()
-            db.query(Transaction).delete()
-            db.query(Customer).delete()
+            # Clear existing data ONLY for the current user
+            from models import Alert, SimulationRun, DataUpload, Customer
+            
+            # Find all previous upload IDs for this user
+            prev_upload_ids = [u.upload_id for u in db.query(DataUpload.upload_id).filter(DataUpload.user_id == user_id).all()]
+            # Find all previous run IDs for this user
+            prev_run_ids = [r.run_id for r in db.query(SimulationRun.run_id).filter(SimulationRun.user_id == user_id).all()]
+            
+            if prev_run_ids:
+                db.query(Alert).filter(Alert.run_id.in_(prev_run_ids)).delete(synchronize_session=False)
+            
+            if prev_upload_ids:
+                db.query(Transaction).filter(Transaction.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                db.query(Customer).filter(Customer.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+            
             db.flush()
             
             db.bulk_insert_mappings(Customer, valid_records)
@@ -329,8 +356,10 @@ async def upload_customers(
 async def get_field_values(
     field: str,
     search: str = "",
+    user_payload: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    user_id = user_payload.get("sub")
     """
     Returns distinct values for a specific field to power UI autocomplete.
     Searches both Transactions and Customers tables.
@@ -342,32 +371,32 @@ async def get_field_values(
 
     for table in potential_tables:
         try:
-            # Try to query the field from this table
-            # Case-insensitive search for better UX
-            sql = f"SELECT DISTINCT {field} FROM {table} WHERE lower(CAST({field} AS TEXT)) LIKE lower(:search) LIMIT 20"
+            # Join with data_uploads to filter by user_id
+            sql = f"""
+                SELECT DISTINCT t.{field} 
+                FROM {table} t
+                JOIN data_uploads du ON t.upload_id = du.upload_id
+                WHERE du.user_id = :user_id 
+                AND lower(CAST(t.{field} AS TEXT)) LIKE lower(:search) 
+                LIMIT 20
+            """
             query = text(sql)
             
-            print(f"[DEBUG] Trying table: {table}, field: {field}, search: '{search}'")
-            print(f"[DEBUG] SQL: {sql}")
-            
-            result = db.execute(query, {"search": f"%{search}%"})
+            result = db.execute(query, {"search": f"%{search}%", "user_id": user_id})
             values = [row[0] for row in result.fetchall() if row[0] is not None]
             
-            print(f"[DEBUG] Found {len(values)} values: {values[:5]}")
-            
             # Return results if found, or if query succeeded (field exists in table)
-            # This handles both successful matches and empty search results
             if values:
                 return {"values": values}
             
-            # If query succeeded but no values, the field exists but search didn't match
-            # Try without search filter to see if field has any data
-            test_sql = f"SELECT DISTINCT {field} FROM {table} WHERE {field} IS NOT NULL LIMIT 1"
-            test_result = db.execute(text(test_sql))
+            # If query succeeded but no values, check if field has ANY data for THIS user
+            test_sql = f"""
+                SELECT t.{field} FROM {table} t 
+                JOIN data_uploads du ON t.upload_id = du.upload_id
+                WHERE du.user_id = :user_id AND t.{field} IS NOT NULL LIMIT 1
+            """
+            test_result = db.execute(text(test_sql), {"user_id": user_id})
             if test_result.fetchone():
-                # Field exists and has data, but search didn't match
-                # Return empty for this specific search
-                print(f"[DEBUG] Field exists in {table} but search didn't match")
                 return {"values": []}
             
         except Exception as e:

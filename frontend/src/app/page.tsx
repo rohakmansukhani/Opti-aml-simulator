@@ -308,46 +308,6 @@ export default function BootScreen() {
                             <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600">
                                 <UploadCloud size={24} />
                             </div>
-
-                            {/* Schema Guide Tooltip */}
-                            <div className="relative group">
-                                <div className="cursor-pointer text-xs font-semibold text-blue-600 bg-blue-50 px-3 py-1.5 rounded-full hover:bg-blue-100 transition-colors">
-                                    View Schema Guide
-                                </div>
-                                <div className="absolute right-0 top-full mt-2 w-96 bg-slate-900 text-slate-300 text-xs rounded-xl p-4 shadow-xl z-50 hidden group-hover:block border border-slate-700">
-                                    <h4 className="font-bold text-white mb-2 text-sm border-b border-slate-700 pb-2">Full Schema Requirements</h4>
-
-                                    <div className="mb-4">
-                                        <strong className="text-blue-400 block mb-1 uppercase tracking-wider">Transactions (Required)</strong>
-                                        <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-                                            <span className="text-white">• transaction_id</span>
-                                            <span className="text-white">• customer_id</span>
-                                            <span className="text-white">• transaction_date</span>
-                                            <span className="text-white">• transaction_amount</span>
-                                            <span className="text-white">• debit_credit_indicator (D/C)</span>
-                                            <span className="text-white">• transaction_type</span>
-                                            <span className="text-white">• channel</span>
-                                            {/* Optional but recommended */}
-                                            <span className="text-slate-500 italic">• transaction_narrative</span>
-                                            <span className="text-slate-500 italic">• beneficiary_name</span>
-                                        </div>
-                                    </div>
-
-                                    <div>
-                                        <strong className="text-emerald-400 block mb-1 uppercase tracking-wider">Customers (Required)</strong>
-                                        <div className="grid grid-cols-2 gap-x-2 gap-y-1">
-                                            <span className="text-white">• customer_id</span>
-                                            <span className="text-white">• customer_name</span>
-                                            <span className="text-white">• customer_type</span>
-                                            <span className="text-white">• occupation</span>
-                                            <span className="text-white">• annual_income</span>
-                                            {/* Optional */}
-                                            <span className="text-slate-500 italic">• account_type</span>
-                                            <span className="text-slate-500 italic">• risk_score</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
                         </div>
 
                         <h2 className="text-2xl font-bold text-slate-900 mb-2">Upload Data</h2>

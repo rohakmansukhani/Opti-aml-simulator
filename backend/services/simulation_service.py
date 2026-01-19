@@ -46,13 +46,42 @@ class SimulationService:
         self.db.commit()
         return run
 
-    def load_simulation_data(self):
+    def _flatten_raw_data(self, df: pd.DataFrame) -> pd.DataFrame:
+        if df.empty or 'raw_data' not in df.columns:
+            return df
+        
+        # Extract raw_data into a temporary DataFrame
+        meta_df = pd.json_normalize(df['raw_data'])
+        
+        # Only add columns that don't already exist in the main DataFrame
+        # This prevents metadata from overwriting explicitly mapped system columns
+        cols_to_add = [c for c in meta_df.columns if c not in df.columns]
+        
+        if not meta_df.empty and cols_to_add:
+            # Concat the new columns
+            df = pd.concat([df.drop(columns=['raw_data']), meta_df[cols_to_add]], axis=1)
+        else:
+            df = df.drop(columns=['raw_data'])
+            
+        return df
+
+    def load_simulation_data(self, user_id: str):
         """
-        Default data loader: Fetches from internal DB.
-        Can be overridden or bypassed by passing DFs directly to execute_run.
+        Default data loader: Fetches from internal DB (Scoped to User) and flattens raw_data.
         """
-        customers_df = pd.read_sql(self.db.query(Customer).statement, self.db.bind)
-        transactions_df = pd.read_sql(self.db.query(Transaction).statement, self.db.bind)
+        from models import DataUpload
+        
+        # We join with DataUpload to ensure we only load data belonging to the specific user
+        customers_query = self.db.query(Customer).join(DataUpload).filter(DataUpload.user_id == user_id)
+        transactions_query = self.db.query(Transaction).join(DataUpload).filter(DataUpload.user_id == user_id)
+        
+        customers_df = pd.read_sql(customers_query.statement, self.db.bind)
+        transactions_df = pd.read_sql(transactions_query.statement, self.db.bind)
+        
+        # Flatten raw_data for both
+        customers_df = self._flatten_raw_data(customers_df)
+        transactions_df = self._flatten_raw_data(transactions_df)
+        
         return customers_df, transactions_df
 
     def execute_run(self, run_id: str, transactions_df: Optional[pd.DataFrame] = None, customers_df: Optional[pd.DataFrame] = None):
@@ -71,7 +100,9 @@ class SimulationService:
         try:
             # 1. Load Simulation Data (If not provided)
             if transactions_df is None or customers_df is None:
-                customers_df, transactions_df = self.load_simulation_data()
+                if not run.user_id:
+                    raise ValueError(f"Run {run_id} has no associated user_id for data loading")
+                customers_df, transactions_df = self.load_simulation_data(run.user_id)
 
             # --- PROD FIX: Apply Run-Level Dynamic Mappings (Schema Adaptation) ---
             if run.metadata_info and 'field_mappings' in run.metadata_info:
