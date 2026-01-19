@@ -2,25 +2,42 @@
 __pycache__/
 *.py[cod]
 *$py.class
+*.so
+.Python
+env/
 venv/
-.env
+ENV/
+.venv
+*.egg-info/
+dist/
+build/
 
-# MacOS
-.DS_Store
+# Node
+node_modules/
+.next/
+out/
+build/
+*.log
+
+# Environment
+.env
+.env.local
+.env.*.local
 
 # IDE
 .vscode/
 .idea/
+*.swp
+*.swo
+.DS_Store
 
-# Database
-*.db
-*.sqlite
+# Development files (not needed in prod)
+copy.py
+copy.tsx
+backend/migrations/
+backend/test_*.py
+RESULTS.txt
 
-# NodeJS
-node_modules/
-.next/
-dist/
-out/
+# Artifacts (documentation only)
+.gemini/
 
-# Temporary Ignore: Aggregate Utility Files
-Flowcharts/

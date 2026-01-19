@@ -5,7 +5,7 @@ import { motion } from 'framer-motion';
 import { Logo } from '@/components/Logo';
 import { useSessionStore } from '@/store/useSessionStore';
 import { useRouter } from 'next/navigation';
-import { UploadCloud, Database, ArrowRight, Loader2, CheckCircle2, Mail, AlertTriangle } from 'lucide-react';
+import { UploadCloud, Database, ArrowRight, Loader2, CheckCircle2, Mail, AlertTriangle, LogOut } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
 import { formatDateIST, formatIST } from '@/lib/date-utils';
 import { DatasetTooLargeModal } from '@/components/DatasetTooLargeModal';
@@ -139,6 +139,13 @@ export default function BootScreen() {
 
     // Initial Auth Check
     const [authChecked, setAuthChecked] = useState(false);
+    const logout = useSessionStore((s) => s.logout);
+
+    const handleSignOut = async () => {
+        await supabase.auth.signOut();
+        logout();
+        window.location.reload();
+    };
 
     useEffect(() => {
         // Recover session if exists
@@ -180,9 +187,11 @@ export default function BootScreen() {
         const queryParams = force ? '?force_replace=true' : '';
 
         try {
+            const token = useSessionStore.getState().token;
             // 1. Upload Customers
             const custRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/data/upload/customers${queryParams}`, {
                 method: 'POST',
+                headers: token ? { 'Authorization': `Bearer ${token}` } : {},
                 body: custFormData,
             });
 
@@ -212,6 +221,7 @@ export default function BootScreen() {
             // If we forced customers, we should force transactions to avoid conflict with the just-uploaded customers record
             const txRes = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/data/upload/transactions${queryParams}`, {
                 method: 'POST',
+                headers: token ? { 'Authorization': `Bearer ${token}` } : {},
                 body: txFormData,
             });
 
@@ -220,6 +230,7 @@ export default function BootScreen() {
                 // We just auto-retry with force because we already committed to this new upload flow
                 const txResRetry = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/data/upload/transactions?force_replace=true`, {
                     method: 'POST',
+                    headers: token ? { 'Authorization': `Bearer ${token}` } : {},
                     body: txFormData,
                 });
                 if (!txResRetry.ok) throw new Error('Transaction upload failed on retry');
@@ -262,9 +273,13 @@ export default function BootScreen() {
         setDbError('');
 
         try {
+            const token = useSessionStore.getState().token;
             const res = await fetch('http://localhost:8000/api/connect', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
+                headers: {
+                    'Content-Type': 'application/json',
+                    ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+                },
                 body: JSON.stringify({ db_url: dbUrl }),
             });
 
@@ -300,118 +315,131 @@ export default function BootScreen() {
                 <AuthScreen onSuccess={() => { }} />
             ) : (
                 // --- SETUP VIEW (Only if authenticated) ---
-                <div className="grid md:grid-cols-2 gap-8 w-full max-w-5xl animate-in fade-in slide-in-from-bottom-8 duration-500">
-                    {/* Option 1: Upload Dataset */}
-                    <div
-                        className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden flex flex-col"
-                    >
-                        <div className="flex items-start justify-between mb-2">
-                            <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600">
-                                <UploadCloud size={24} />
+                <div className="w-full max-w-5xl relative">
+                    {/* Floating Logout Button */}
+                    <div className="absolute -top-16 right-0">
+                        <button
+                            onClick={handleSignOut}
+                            className="flex items-center px-4 py-2 text-sm font-medium text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-all border border-slate-200 bg-white shadow-sm"
+                        >
+                            <LogOut size={16} className="mr-2" />
+                            Sign Out
+                        </button>
+                    </div>
+
+                    <div className="grid md:grid-cols-2 gap-8 w-full animate-in fade-in slide-in-from-bottom-8 duration-500">
+                        {/* Option 1: Upload Dataset */}
+                        <div
+                            className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden flex flex-col"
+                        >
+                            <div className="flex items-start justify-between mb-2">
+                                <div className="w-12 h-12 bg-blue-50 rounded-xl flex items-center justify-center text-blue-600">
+                                    <UploadCloud size={24} />
+                                </div>
                             </div>
-                        </div>
 
-                        <h2 className="text-2xl font-bold text-slate-900 mb-2">Upload Data</h2>
-                        <p className="text-slate-500 mb-6 leading-relaxed">
-                            Initialize simulation with your data. <br />
-                            <span className="text-sm text-slate-400">*Both files are required for accurate simulation.</span>
-                        </p>
+                            <h2 className="text-2xl font-bold text-slate-900 mb-2">Upload Data</h2>
+                            <p className="text-slate-500 mb-6 leading-relaxed">
+                                Initialize simulation with your data. <br />
+                                <span className="text-sm text-slate-400">*Both files are required for accurate simulation.</span>
+                            </p>
 
-                        <div className="space-y-4 flex-grow">
-                            {/* Transaction Upload */}
-                            <div className="relative">
-                                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-1 block flex justify-between">
-                                    <span>Transaction Data <span className="text-red-500">*</span></span>
-                                    {selectedFile && <CheckCircle2 size={16} className="text-emerald-500" />}
-                                </label>
-                                <input
-                                    type="file"
-                                    accept=".csv,.xlsx,.xls"
-                                    onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
-                                    className="block w-full text-sm text-slate-500
+                            <div className="space-y-4 flex-grow">
+                                {/* Transaction Upload */}
+                                <div className="relative">
+                                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-1 block flex justify-between">
+                                        <span>Transaction Data <span className="text-red-500">*</span></span>
+                                        {selectedFile && <CheckCircle2 size={16} className="text-emerald-500" />}
+                                    </label>
+                                    <input
+                                        type="file"
+                                        accept=".csv,.xlsx,.xls"
+                                        onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                                        className="block w-full text-sm text-slate-500
                                       file:mr-4 file:py-2 file:px-4
                                       file:rounded-full file:border-0
                                       file:text-sm file:font-semibold
                                       file:bg-blue-50 file:text-blue-700
                                       hover:file:bg-blue-100
                                       cursor-pointer border border-slate-200 rounded-lg p-1"
-                                />
-                            </div>
+                                    />
+                                </div>
 
-                            {/* Customer Upload */}
-                            <div className="relative">
-                                <label className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-1 block flex justify-between">
-                                    <span>Customer Data <span className="text-red-500">*</span></span>
-                                    {customerFile && <CheckCircle2 size={16} className="text-emerald-500" />}
-                                </label>
-                                <input
-                                    type="file"
-                                    accept=".csv,.xlsx,.xls"
-                                    onChange={(e) => setCustomerFile(e.target.files?.[0] || null)}
-                                    className="block w-full text-sm text-slate-500
+                                {/* Customer Upload */}
+                                <div className="relative">
+                                    <label className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-1 block flex justify-between">
+                                        <span>Customer Data <span className="text-red-500">*</span></span>
+                                        {customerFile && <CheckCircle2 size={16} className="text-emerald-500" />}
+                                    </label>
+                                    <input
+                                        type="file"
+                                        accept=".csv,.xlsx,.xls"
+                                        onChange={(e) => setCustomerFile(e.target.files?.[0] || null)}
+                                        className="block w-full text-sm text-slate-500
                                       file:mr-4 file:py-2 file:px-4
                                       file:rounded-full file:border-0
                                       file:text-sm file:font-semibold
                                       file:bg-emerald-50 file:text-emerald-700
                                       hover:file:bg-emerald-100
                                       cursor-pointer border border-slate-200 rounded-lg p-1"
-                                />
-                            </div>
-
-                            {uploadError && (
-                                <div className="text-red-500 text-sm bg-red-50 p-2 rounded border border-red-100">
-                                    {uploadError}
+                                    />
                                 </div>
-                            )}
-                        </div>
 
-                        <button
-                            onClick={handleFileUpload}
-                            disabled={uploadLoading || !selectedFile || !customerFile}
-                            className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold transition-all flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed mt-6 shadow-lg shadow-blue-200"
-                        >
-                            {uploadLoading ? <Loader2 size={18} className="animate-spin mr-2" /> : <div className="flex items-center">Ignite Simulation <ArrowRight size={18} className="ml-2" /></div>}
-                        </button>
-                    </div>
-
-                    {/* Option 2: Connect DB */}
-                    <div
-                        className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden flex flex-col"
-                    >
-                        <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center mb-6 text-slate-700">
-                            <Database size={24} />
-                        </div>
-
-                        <h2 className="text-2xl font-bold text-slate-900 mb-2">Connect Database</h2>
-                        <p className="text-slate-500 mb-6 leading-relaxed flex-grow">
-                            Connect to an existing Enterprise PostgreSQL instance for live production data analysis.
-                        </p>
-
-                        <div className="space-y-4">
-                            <div>
-                                <label className="block text-sm font-medium text-slate-700 mb-1">Database Connection String</label>
-                                <input
-                                    type="text"
-                                    placeholder="postgresql://user:pass@host:5432/db"
-                                    className="w-full px-4 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm font-mono"
-                                    value={dbUrl}
-                                    onChange={(e) => setDbUrl(e.target.value)}
-                                />
+                                {uploadError && (
+                                    <div className="text-red-500 text-sm bg-red-50 p-2 rounded border border-red-100">
+                                        {uploadError}
+                                    </div>
+                                )}
                             </div>
-
-                            {dbError && (
-                                <div className="text-red-500 text-sm bg-red-50 p-2 rounded border border-red-100">
-                                    {dbError}
-                                </div>
-                            )}
 
                             <button
-                                onClick={handleEnterpriseConnect}
-                                disabled={dbLoading || !dbUrl}
-                                className="w-full bg-slate-900 hover:bg-slate-800 text-white py-2.5 rounded-lg font-medium transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                                onClick={handleFileUpload}
+                                disabled={uploadLoading || !selectedFile || !customerFile}
+                                className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-xl font-bold transition-all flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed mt-6 shadow-lg shadow-blue-200"
                             >
-                                {dbLoading ? <Loader2 size={18} className="animate-spin mr-2" /> : <div className="flex items-center">Connect & Boot <ArrowRight size={16} className="ml-2" /></div>}
+                                {uploadLoading ? <Loader2 size={18} className="animate-spin mr-2" /> : <div className="flex items-center">Ignite Simulation <ArrowRight size={18} className="ml-2" /></div>}
                             </button>
+                        </div>
+
+                        {/* Option 2: Connect DB */}
+                        <div
+                            className="bg-white p-8 rounded-2xl border border-slate-200 shadow-sm relative overflow-hidden flex flex-col"
+                        >
+                            <div className="w-12 h-12 bg-slate-100 rounded-xl flex items-center justify-center mb-6 text-slate-700">
+                                <Database size={24} />
+                            </div>
+
+                            <h2 className="text-2xl font-bold text-slate-900 mb-2">Connect Database</h2>
+                            <p className="text-slate-500 mb-6 leading-relaxed flex-grow">
+                                Connect to an existing Enterprise PostgreSQL instance for live production data analysis.
+                            </p>
+
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-sm font-medium text-slate-700 mb-1">Database Connection String</label>
+                                    <input
+                                        type="text"
+                                        placeholder="postgresql://user:pass@host:5432/db"
+                                        className="w-full px-4 py-2 rounded-lg border border-slate-300 focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none transition-all text-sm font-mono"
+                                        value={dbUrl}
+                                        onChange={(e) => setDbUrl(e.target.value)}
+                                    />
+                                </div>
+
+                                {dbError && (
+                                    <div className="text-red-500 text-sm bg-red-50 p-2 rounded border border-red-100">
+                                        {dbError}
+                                    </div>
+                                )}
+
+                                <button
+                                    onClick={handleEnterpriseConnect}
+                                    disabled={dbLoading || !dbUrl}
+                                    className="w-full bg-slate-900 hover:bg-slate-800 text-white py-2.5 rounded-lg font-medium transition-colors flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {dbLoading ? <Loader2 size={18} className="animate-spin mr-2" /> : <div className="flex items-center">Connect & Boot <ArrowRight size={16} className="ml-2" /></div>}
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>

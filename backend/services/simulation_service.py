@@ -26,13 +26,56 @@ def timeout(seconds):
 
 class SimulationService:
     """
-    Manages the lifecycle of a simulation execution.
+    Manages the lifecycle of AML simulation execution.
+    
+    This service orchestrates the entire simulation workflow:
+    1. Creating simulation run records
+    2. Loading user-scoped data
+    3. Executing scenarios via UniversalScenarioEngine
+    4. Saving alerts to database
+    5. Updating run status
+    
+    Supports both database-backed and stateless ("pendrive mode") execution.
+    
+    Attributes:
+        db: SQLAlchemy database session for persistence
+    
+    Example:
+        >>> service = SimulationService(db)
+        >>> run = service.create_run('ad_hoc', ['rapid-movement'], user_id='user-123')
+        >>> service.execute_run(run.run_id)
     """
     
     def __init__(self, db: Session):
+        """
+        Initialize the simulation service.
+        
+        Args:
+            db: SQLAlchemy database session
+        """
         self.db = db
         
     def create_run(self, run_type: str, scenarios: List[str], user_id: str = None) -> SimulationRun:
+        """
+        Create a new simulation run record.
+        
+        Args:
+            run_type: Type of run ('ad_hoc', 'scheduled', 'comparison')
+            scenarios: List of scenario IDs to execute
+            user_id: User who initiated the run (for multi-tenancy)
+            
+        Returns:
+            SimulationRun object with status='pending'
+            
+        Example:
+            >>> run = service.create_run(
+            ...     run_type='ad_hoc',
+            ...     scenarios=['rapid-movement', 'structuring'],
+            ...     user_id='user-abc-123'
+            ... )
+            >>> print(run.run_id)
+            'run-def-456'
+        """
         run_id = str(uuid.uuid4())
         run = SimulationRun(
             run_id=run_id,
@@ -67,7 +110,24 @@ class SimulationService:
 
     def load_simulation_data(self, user_id: str):
         """
-        Default data loader: Fetches from internal DB (Scoped to User) and flattens raw_data.
+        Load transaction and customer data for a specific user.
+        
+        Fetches data from the database, scoped to the user via DataUpload join,
+        and flattens the raw_data JSONB column into DataFrame columns.
+        
+        Args:
+            user_id: User UUID to scope data loading
+            
+        Returns:
+            Tuple of (customers_df, transactions_df) as pandas DataFrames
+            
+        Raises:
+            ValueError: If user has no uploaded data
+            
+        Example:
+            >>> customers_df, transactions_df = service.load_simulation_data('user-123')
+            >>> print(f"Loaded {len(transactions_df)} transactions")
+            Loaded 5000 transactions
         """
         from models import DataUpload
         
@@ -86,8 +146,40 @@ class SimulationService:
 
     def execute_run(self, run_id: str, transactions_df: Optional[pd.DataFrame] = None, customers_df: Optional[pd.DataFrame] = None):
         """
-        Main execution loop for a simulation.
-        Supports "Stateless / Pendrive Mode" (Gap 2) by accepting raw DataFrames.
+        Execute a simulation run against transaction data.
+        
+        This is the main orchestration method that:
+        1. Loads data (from DB or accepts provided DataFrames)
+        2. Applies field mappings and date filters
+        3. Executes each scenario via UniversalScenarioEngine
+        4. Saves generated alerts to database
+        5. Updates run status
+        
+        Supports "Stateless/Pendrive Mode" by accepting raw DataFrames,
+        allowing simulations to run without database-backed data.
+        
+        Args:
+            run_id: Unique identifier for the simulation run
+            transactions_df: Optional DataFrame of transactions (for stateless mode)
+            customers_df: Optional DataFrame of customers (for stateless mode)
+            
+        Returns:
+            None (updates run status in database)
+            
+        Raises:
+            ValueError: If run_id not found or user_id missing when loading from DB
+            TimeoutError: If scenario execution exceeds 5 minutes
+            
+        Example:
+            >>> # Database-backed mode
+            >>> service.execute_run('run-abc-123')
+            
+            >>> # Stateless mode
+            >>> service.execute_run(
+            ...     run_id='run-def-456',
+            ...     transactions_df=uploaded_txns,
+            ...     customers_df=uploaded_custs
+            ... )
         """
         run = self.db.query(SimulationRun).filter(SimulationRun.run_id == run_id).first()
         if not run:

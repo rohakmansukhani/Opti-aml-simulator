@@ -1,13 +1,13 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text, inspect
-from datetime import datetime
+from datetime import datetime, timezone
 import pandas as pd
 import io
 
 from database import get_db
 from services.data_ingestion import DataIngestionService
-from models import Transaction, DataUpload
+from models import Transaction, DataUpload, Alert, SimulationRun, Customer
 from core.upload_validator import UploadValidator
 from core.ttl_manager import TTLManager
 from auth import get_current_user
@@ -17,7 +17,7 @@ router = APIRouter(prefix="/api/data", tags=["Data"])
 @router.post("/upload/transactions")
 async def upload_transactions(
     file: UploadFile = File(...),
-    force_replace: bool = False,  # Query param to force replacement
+    force_replace: bool = False,
     user_payload: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
@@ -33,6 +33,9 @@ async def upload_transactions(
     except Exception as e:
          raise HTTPException(400, str(e))
     
+    if not valid_records:
+        raise HTTPException(400, "No valid records found. Please ensure headers match: transaction_id, customer_id, etc.")
+
     # Convert to DataFrame for validation
     if valid_records:
         df = pd.DataFrame(valid_records)
@@ -51,7 +54,7 @@ async def upload_transactions(
         # CHECK FOR EXISTING DATA
         existing_upload = db.execute(
             text("""
-                SELECT upload_id, expires_at, record_count_transactions, filename
+                SELECT upload_id, expires_at, record_count_transactions, filename, upload_timestamp
                 FROM data_uploads 
                 WHERE status = 'active' 
                 AND user_id = :user_id
@@ -59,17 +62,15 @@ async def upload_transactions(
                 ORDER BY upload_timestamp DESC
                 LIMIT 1
             """),
-            {"now": datetime.utcnow(), "user_id": user_id}
+            {"now": datetime.now(timezone.utc), "user_id": user_id}
         ).fetchone()
         
         if existing_upload and not force_replace:
-            upload_id, expires_at, existing_count, existing_filename = existing_upload
+            upload_id, expires_at, existing_count, existing_filename, ts = existing_upload
             
-            # If same file and similar count, extend TTL instead of replacing
+            # 1. If same file and similar count, extend TTL instead of replacing
             if existing_filename == file.filename and abs(existing_count - len(valid_records)) < 10:
-                # Extend TTL by 24 hours
                 TTLManager.extend_ttl(db, upload_id, additional_hours=24)
-                
                 return {
                     "status": "extended",
                     "message": "Existing data found. TTL extended by 24 hours.",
@@ -78,11 +79,22 @@ async def upload_transactions(
                     "records_count": existing_count,
                     "action": "ttl_extended"
                 }
+            
+            # 2. Sequential Upload Logic: If recent (5m) upload exists with 0 transactions, 
+            # it's likely part of the same batch (customers just uploaded)
+            upload_age = (datetime.now(timezone.utc) - ts).total_seconds()
+            if existing_count == 0 and upload_age < 300:
+                # Merge into existing record
+                upload_id = existing_upload.upload_id
+                db.execute(
+                    text("UPDATE data_uploads SET record_count_transactions = :count, filename = :fname WHERE upload_id = :uid"),
+                    {"count": len(valid_records), "fname": f"{existing_filename}+{file.filename}", "uid": upload_id}
+                )
             else:
                 # Different data - warn user
                 raise HTTPException(409, detail={
                     "error": "existing_data_conflict",
-                    "message": f"Active data exists (expires: {expires_at.isoformat()}). Use force_replace=true to replace.",
+                    "message": f"Active data exists ({existing_filename}). Use force_replace=true to replace.",
                     "existing_upload_id": str(upload_id),
                     "expires_at": expires_at.isoformat(),
                     "existing_filename": existing_filename,
@@ -111,7 +123,7 @@ async def upload_transactions(
         
         try:
             # Clear existing data ONLY for the current user
-            from models import Alert, SimulationRun, DataUpload
+            from models import Alert, SimulationRun, DataUpload, Transaction
             
             # Find all previous upload IDs for this user
             prev_upload_ids = [u.upload_id for u in db.query(DataUpload.upload_id).filter(DataUpload.user_id == user_id).all()]
@@ -124,6 +136,11 @@ async def upload_transactions(
             if prev_upload_ids:
                 db.query(Transaction).filter(Transaction.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
             
+            # EXTRA SAFETY: Delete specific records in the current batch that would cause unique conflicts
+            incoming_txn_ids = [r['transaction_id'] for r in valid_records if 'transaction_id' in r]
+            if incoming_txn_ids:
+                db.query(Transaction).filter(Transaction.transaction_id.in_(incoming_txn_ids)).delete(synchronize_session=False)
+                
             db.flush()
             
             db.bulk_insert_mappings(Transaction, valid_records)
@@ -137,7 +154,7 @@ async def upload_transactions(
         "records_uploaded": len(valid_records),
         "errors": len(errors),
         "error_sample": errors[:5] if errors else [],
-        "upload_id": upload_id if valid_records else None,
+        "upload_id": str(upload_id) if valid_records else None,
         "expires_at": expires_at.isoformat() if valid_records else None,
         "action": "new_upload"
     }
@@ -228,6 +245,7 @@ async def upload_customers(
     db: Session = Depends(get_db)
 ):
     user_id = user_payload.get("sub")
+    
     if not file.filename.endswith(('.csv', '.xls', '.xlsx')):
         raise HTTPException(400, "Only CSV and Excel files are supported")
     
@@ -238,6 +256,9 @@ async def upload_customers(
     except Exception as e:
         raise HTTPException(400, str(e))
     
+    if not valid_records:
+        raise HTTPException(400, "No valid records found. Please ensure headers match: customer_id, customer_name, etc.")
+
     if valid_records:
         df = pd.DataFrame(valid_records)
         
@@ -255,7 +276,7 @@ async def upload_customers(
         # CHECK FOR EXISTING DATA
         existing_upload = db.execute(
             text("""
-                SELECT upload_id, expires_at, record_count_customers, filename
+                SELECT upload_id, expires_at, record_count_customers, filename, upload_timestamp
                 FROM data_uploads 
                 WHERE status = 'active' 
                 AND user_id = :user_id
@@ -263,13 +284,13 @@ async def upload_customers(
                 ORDER BY upload_timestamp DESC
                 LIMIT 1
             """),
-            {"now": datetime.utcnow(), "user_id": user_id}
+            {"now": datetime.now(timezone.utc), "user_id": user_id}
         ).fetchone()
         
         if existing_upload and not force_replace:
-            upload_id, expires_at, existing_count, existing_filename = existing_upload
+            upload_id, expires_at, existing_count, existing_filename, ts = existing_upload
             
-            # If same file and similar count, extend TTL instead of replacing
+            # 1. If same file and similar count, extend TTL instead of replacing
             if existing_filename == file.filename and abs(existing_count - len(valid_records)) < 5:
                 # Extend TTL by 24 hours
                 TTLManager.extend_ttl(db, upload_id, additional_hours=24)
@@ -282,11 +303,22 @@ async def upload_customers(
                     "records_count": existing_count,
                     "action": "ttl_extended"
                 }
+            
+            # 2. Sequential Upload Logic: If recent (5m) upload exists with 0 customers,
+            # it's likely part of the same batch (transactions just uploaded)
+            upload_age = (datetime.now(timezone.utc) - ts).total_seconds()
+            if existing_count == 0 and upload_age < 300:
+                # Merge into existing record
+                upload_id = existing_upload.upload_id
+                db.execute(
+                    text("UPDATE data_uploads SET record_count_customers = :count, filename = :fname WHERE upload_id = :uid"),
+                    {"count": len(valid_records), "fname": f"{existing_filename}+{file.filename}", "uid": upload_id}
+                )
             else:
                 # Different data - warn user
                 raise HTTPException(409, detail={
                     "error": "existing_data_conflict",
-                    "message": f"Active data exists (expires: {expires_at.isoformat()}). Use force_replace=true to replace.",
+                    "message": f"Active data exists ({existing_filename}). Use force_replace=true to replace.",
                     "existing_upload_id": str(upload_id),
                     "expires_at": expires_at.isoformat(),
                     "existing_filename": existing_filename,
@@ -315,19 +347,32 @@ async def upload_customers(
         
         try:
             # Clear existing data ONLY for the current user
-            from models import Alert, SimulationRun, DataUpload, Customer
+            from models import Alert, SimulationRun, DataUpload, Customer, Transaction
             
             # Find all previous upload IDs for this user
             prev_upload_ids = [u.upload_id for u in db.query(DataUpload.upload_id).filter(DataUpload.user_id == user_id).all()]
             # Find all previous run IDs for this user
             prev_run_ids = [r.run_id for r in db.query(SimulationRun.run_id).filter(SimulationRun.user_id == user_id).all()]
             
+            # 1. Delete Alerts linked to this user's runs
             if prev_run_ids:
                 db.query(Alert).filter(Alert.run_id.in_(prev_run_ids)).delete(synchronize_session=False)
             
+            # 2. Delete Transactions/Customers linked to this user's uploads
             if prev_upload_ids:
                 db.query(Transaction).filter(Transaction.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
                 db.query(Customer).filter(Customer.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+            
+            # 3. EXTRA SAFETY: Delete specific records in the current batch that would cause unique conflicts
+            # This handles orphans from old systems or failed partial uploads
+            incoming_cust_ids = [r['customer_id'] for r in valid_records if 'customer_id' in r]
+            if incoming_cust_ids:
+                # FIRST: Delete referencing Alerts (FK constraint)
+                db.query(Alert).filter(Alert.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
+                # SECOND: Delete referencing Transactions (FK constraint)
+                db.query(Transaction).filter(Transaction.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
+                # THIRD: Now safe to delete the customers
+                db.query(Customer).filter(Customer.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
             
             db.flush()
             
@@ -341,7 +386,7 @@ async def upload_customers(
         "status": "success",
         "records_uploaded": len(valid_records),
         "errors": len(errors),
-        "upload_id": upload_id if valid_records else None,
+        "upload_id": str(upload_id) if valid_records else None,
         "expires_at": expires_at.isoformat() if valid_records else None,
         "action": "new_upload"
     }
@@ -362,7 +407,7 @@ async def get_field_values(
 
     for table in potential_tables:
         try:
-            # Join with data_uploads to filter by user_id
+            # 1. TRY DIRECT COLUMN QUERY
             sql = f"""
                 SELECT DISTINCT t.{field} 
                 FROM {table} t
@@ -371,32 +416,59 @@ async def get_field_values(
                 AND lower(CAST(t.{field} AS TEXT)) LIKE lower(:search) 
                 LIMIT 20
             """
-            query = text(sql)
-            
-            result = db.execute(query, {"search": f"%{search}%", "user_id": user_id})
+            result = db.execute(text(sql), {"search": f"%{search}%", "user_id": user_id})
             values = [row[0] for row in result.fetchall() if row[0] is not None]
             
-            # Return results if found, or if query succeeded (field exists in table)
             if values:
                 return {"values": values}
-            
+
+            # 2. TRY JSONB raw_data QUERY (if column query returned nothing or we want to search flexible fields)
+            json_sql = f"""
+                SELECT DISTINCT t.raw_data ->> :field_name
+                FROM {table} t
+                JOIN data_uploads du ON t.upload_id = du.upload_id
+                WHERE du.user_id = :user_id 
+                AND lower(t.raw_data ->> :field_name) LIKE lower(:search)
+                LIMIT 20
+            """
+            json_result = db.execute(text(json_sql), {"field_name": field, "search": f"%{search}%", "user_id": user_id})
+            json_values = [row[0] for row in json_result.fetchall() if row[0] is not None]
+
+            if json_values:
+                return {"values": json_values}
+                
             # If query succeeded but no values, check if field has ANY data for THIS user
             test_sql = f"""
-                SELECT t.{field} FROM {table} t 
+                SELECT 1 FROM {table} t 
                 JOIN data_uploads du ON t.upload_id = du.upload_id
-                WHERE du.user_id = :user_id AND t.{field} IS NOT NULL LIMIT 1
+                WHERE du.user_id = :user_id LIMIT 1
             """
             test_result = db.execute(text(test_sql), {"user_id": user_id})
             if test_result.fetchone():
                 return {"values": []}
             
         except Exception as e:
-            # Column likely doesn't exist in this table, try next
+            # Column might not exist in this table, try JSONB approach immediately as fallback
+            try:
+                # Same JSONB query as above but specifically for when the main column is missing
+                json_sql = f"""
+                    SELECT DISTINCT t.raw_data ->> :field_name
+                    FROM {table} t
+                    JOIN data_uploads du ON t.upload_id = du.upload_id
+                    WHERE du.user_id = :user_id 
+                    AND lower(t.raw_data ->> :field_name) LIKE lower(:search)
+                    LIMIT 20
+                """
+                json_result = db.execute(text(json_sql), {"field_name": field, "search": f"%{search}%", "user_id": user_id})
+                json_values = [row[0] for row in json_result.fetchall() if row[0] is not None]
+                if json_values:
+                    return {"values": json_values}
+            except:
+                db.rollback()
+            
             db.rollback()
-            print(f"[DEBUG] Error querying {table}.{field}: {e}")
             continue
             
-    print(f"[DEBUG] Field {field} not found in any table")
     return {"values": []}
 
 @router.post("/ttl/extend")
@@ -421,7 +493,7 @@ async def extend_ttl(
     
     return {
         "status": "success",
-        "upload_id": upload_id,
+        "upload_id": str(upload_id),
         "new_expires_at": result[0].isoformat() if result else None,
         "hours_added": additional_hours
     }

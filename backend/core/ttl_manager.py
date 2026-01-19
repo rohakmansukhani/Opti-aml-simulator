@@ -2,11 +2,15 @@
 TTL Manager - Handles automatic data expiration and cleanup
 """
 
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import Optional
 import uuid
+import json
+import structlog
+
+logger = structlog.get_logger("ttl_manager")
 
 
 class TTLManager:
@@ -18,37 +22,37 @@ class TTLManager:
     @staticmethod
     def set_expiry(hours: int = DEFAULT_TTL_HOURS) -> datetime:
         """
-        Calculate expiry timestamp.
+        Calculate expiry timestamp (timezone-aware).
         
         Args:
             hours: Number of hours until expiration
             
         Returns:
-            datetime object representing expiry time
+            timezone-aware datetime object representing expiry time
         """
-        return datetime.utcnow() + timedelta(hours=hours)
+        return datetime.now(timezone.utc) + timedelta(hours=hours)
     
     @staticmethod
     def create_upload_record(
         db: Session,
-        user_id: str,
+        user_id: str,  # UUID as string from JWT
         filename: str,
         txn_count: int,
         cust_count: int,
         schema_snapshot: dict,
         ttl_hours: int = DEFAULT_TTL_HOURS
-    ) -> str:
+    ) -> uuid.UUID:
         """
         Create a new upload metadata record.
         
         Returns:
-            upload_id (str)
+            upload_id (UUID object)
         """
-        import json
-        from models import Base
-        
-        upload_id = str(uuid.uuid4())
+        upload_id = uuid.uuid4()  # Native UUID object
         expires_at = TTLManager.set_expiry(ttl_hours)
+        
+        # Serialize schema to JSON string
+        schema_json = json.dumps(schema_snapshot)
         
         # Insert into data_uploads table
         query = text("""
@@ -60,17 +64,22 @@ class TTLManager:
              :cust_count, CAST(:schema AS jsonb), :expires_at, 'active')
         """)
         
-        db.execute(query, {
-            "upload_id": upload_id,
-            "user_id": user_id,
-            "filename": filename,
-            "txn_count": txn_count,
-            "cust_count": cust_count,
-            "schema": json.dumps(schema_snapshot),  # Proper JSON serialization
-            "expires_at": expires_at
-        })
-        # REMOVED: db.commit() - Let the calling function handle the transaction
+        try:
+            db.execute(query, {
+                "upload_id": upload_id,
+                "user_id": user_id,  # Pass as string, cast to UUID in SQL
+                "filename": filename,
+                "txn_count": txn_count,
+                "cust_count": cust_count,
+                "schema": schema_json,
+                "expires_at": expires_at
+            })
+            logger.info("upload_record_created", upload_id=str(upload_id), user_id=user_id)
+        except Exception as e:
+            logger.error("upload_record_creation_failed", error=str(e), upload_id=str(upload_id))
+            raise
         
+        # REMOVED: db.commit() - Let the calling function handle the transaction
         return upload_id
     
     @staticmethod
@@ -93,18 +102,17 @@ class TTLManager:
         ).fetchone()
         
         if not result:
+            logger.warning("extend_ttl_failed_not_found", upload_id=upload_id)
             return False
         
         current_expiry = result[0]
         new_expiry = current_expiry + timedelta(hours=additional_hours)
         
         # Cap at MAX_TTL_HOURS from now
-        # Ensure max_allowed is timezone-aware if new_expiry is
-        from datetime import timezone
         now = datetime.now(timezone.utc)
         max_allowed = now + timedelta(hours=TTLManager.MAX_TTL_HOURS)
         
-        # Make new_expiry aware if it's naive, or max_allowed naive if needed
+        # Make new_expiry aware if it's naive
         if new_expiry.tzinfo is None:
             new_expiry = new_expiry.replace(tzinfo=timezone.utc)
             
@@ -122,86 +130,110 @@ class TTLManager:
         )
         db.commit()
         
+        logger.info("ttl_extended", upload_id=upload_id, new_expiry=new_expiry.isoformat())
         return True
     
     @staticmethod
-    def cleanup_expired(db: Session) -> dict:
+    def cleanup_expired(db: Session, dry_run: bool = False) -> dict:
         """
-        Delete expired data (called by cron job).
+        Delete expired PII data while preserving anonymized alerts.
         
-        Deletes in correct order to avoid foreign key violations:
-        1. Alerts (references customers)
-        2. Transactions
-        3. Customers
+        Critical Flow:
+        1. Anonymize alerts BEFORE deleting customers (preserve customer_name)
+        2. Delete transactions (raw PII)
+        3. Delete customers (FK cascade sets alert.customer_id = NULL)
+        4. Mark data_uploads as expired
+        
+        Args:
+            db: Database session
+            dry_run: If True, rollback instead of commit (for testing)
         
         Returns:
-            dict with cleanup statistics
+            dict with cleanup statistics including anonymized alert count
         """
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
         
-        # Count before deletion
-        alert_count = db.execute(
+        logger.info("cleanup_started", timestamp=now.isoformat(), dry_run=dry_run)
+        
+        # Get expired upload IDs
+        expired_uploads = db.execute(
+            text("SELECT upload_id FROM data_uploads WHERE expires_at < :now AND status = 'active'"),
+            {"now": now}
+        ).fetchall()
+        
+        expired_ids = [str(row[0]) for row in expired_uploads]
+        
+        if not expired_ids:
+            logger.info("cleanup_no_expired_data")
+            return {
+                "alerts_anonymized": 0,
+                "transactions_deleted": 0,
+                "customers_deleted": 0,
+                "uploads_expired": 0,
+                "timestamp": now.isoformat(),
+                "dry_run": dry_run
+            }
+        
+        # STEP 1: Anonymize alerts BEFORE deleting customers
+        # This preserves customer_name while removing PII linkage
+        anonymize_result = db.execute(
             text("""
-                SELECT COUNT(*) FROM alerts a
-                JOIN data_uploads du ON a.run_id IN (
-                    SELECT run_id FROM simulation_run WHERE upload_id = du.upload_id
+                UPDATE alerts
+                SET 
+                    customer_name = 'ANONYMIZED-' || SUBSTRING(customer_id, 1, 8),
+                    is_anonymized = true,
+                    anonymized_at = :now,
+                    trigger_details = jsonb_set(
+                        COALESCE(trigger_details, '{}'::jsonb),
+                        '{pii_removed}',
+                        'true'::jsonb
+                    )
+                WHERE customer_id IN (
+                    SELECT customer_id FROM customers WHERE upload_id = ANY(:ids::uuid[])
                 )
-                WHERE du.expires_at < :now
+                AND is_anonymized = false
             """),
-            {"now": now}
-        ).scalar() or 0
-        
-        txn_count = db.execute(
-            text("SELECT COUNT(*) FROM transactions WHERE expires_at < :now"),
-            {"now": now}
-        ).scalar() or 0
-        
-        cust_count = db.execute(
-            text("SELECT COUNT(*) FROM customers WHERE expires_at < :now"),
-            {"now": now}
-        ).scalar() or 0
-        
-        # Delete in correct order to avoid foreign key violations
-        
-        # 1. Delete alerts first (they reference customers)
-        db.execute(text("""
-            DELETE FROM alerts
-            WHERE run_id IN (
-                SELECT sr.run_id 
-                FROM simulation_run sr
-                JOIN data_uploads du ON sr.upload_id = du.upload_id
-                WHERE du.expires_at < :now
-            )
-        """), {"now": now})
-        
-        # 2. Delete transactions
-        db.execute(
-            text("DELETE FROM transactions WHERE expires_at < :now"),
-            {"now": now}
+            {"now": now, "ids": expired_ids}
         )
+        alerts_anonymized = anonymize_result.rowcount
         
-        # 3. Delete customers (no longer referenced by alerts)
-        db.execute(
-            text("DELETE FROM customers WHERE expires_at < :now"),
-            {"now": now}
+        # STEP 2: Delete transactions (raw PII)
+        txn_result = db.execute(
+            text("DELETE FROM transactions WHERE upload_id = ANY(:ids::uuid[])"),
+            {"ids": expired_ids}
         )
+        transactions_deleted = txn_result.rowcount
         
-        # 4. Update upload status
-        db.execute(
-            text("""
-                UPDATE data_uploads 
-                SET status = 'expired' 
-                WHERE expires_at < :now AND status = 'active'
-            """),
-            {"now": now}
+        # STEP 3: Delete customers (FK cascade sets alert.customer_id = NULL)
+        cust_result = db.execute(
+            text("DELETE FROM customers WHERE upload_id = ANY(:ids::uuid[])"),
+            {"ids": expired_ids}
         )
+        customers_deleted = cust_result.rowcount
         
-        db.commit()
+        # STEP 4: Mark uploads as expired
+        upload_result = db.execute(
+            text("UPDATE data_uploads SET status = 'expired' WHERE upload_id = ANY(:ids::uuid[])"),
+            {"ids": expired_ids}
+        )
+        uploads_expired = upload_result.rowcount
         
-        return {
-            "alerts_deleted": alert_count,
-            "transactions_deleted": txn_count,
-            "customers_deleted": cust_count,
-            "timestamp": datetime.utcnow().isoformat()
+        result = {
+            "alerts_anonymized": alerts_anonymized,
+            "transactions_deleted": transactions_deleted,
+            "customers_deleted": customers_deleted,
+            "uploads_expired": uploads_expired,
+            "upload_ids_processed": expired_ids,
+            "timestamp": now.isoformat(),
+            "dry_run": dry_run
         }
+        
+        if dry_run:
+            db.rollback()
+            logger.info("cleanup_dry_run_completed", **result)
+        else:
+            db.commit()
+            logger.info("cleanup_completed", **result)
+        
+        return result
 

@@ -35,8 +35,6 @@ async def get_current_user_token(request: Request):
     """
     auth_header = request.headers.get("Authorization")
     if not auth_header:
-        # Allow anonymous for now if endpoint handles it, or raise 401
-        # For strict auth:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Missing Authorization Header")
 
     try:
@@ -49,7 +47,7 @@ async def get_current_user_token(request: Request):
     # 1. Get Key ID (kid) from header
     try:
         headers = jwt.get_unverified_headers(token)
-    except Exception:
+    except Exception as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid Token Headers")
         
     kid = headers.get("kid")
@@ -59,8 +57,8 @@ async def get_current_user_token(request: Request):
     # 2. Fetch JWKS from Supabase
     try:
         jwks = get_jwks()
-    except Exception:
-         raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Auth Provider Unavailable")
+    except Exception as e:
+        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "Auth Provider Unavailable")
     
     # 3. Find matching key
     key_data = next((k for k in jwks["keys"] if k["kid"] == kid), None)
@@ -69,16 +67,12 @@ async def get_current_user_token(request: Request):
     
     # 4. Verify & Decode
     try:
-        # Construct key using the matching key data from JWKS
-        public_key = jwk.construct(key_data)
-        
-        # Use the algorithm specified in the token header, defaulting to RS256
-        # Supabase often uses ES256
+        # Supabase uses ES256. python-jose handles JWK dicts directly.
         alg = headers.get("alg", "RS256")
         
         payload = jwt.decode(
             token, 
-            public_key.to_pem().decode("utf-8"), 
+            key_data, # Use the JWK dict directly
             algorithms=[alg],
             options={
                 "verify_aud": False,
@@ -93,7 +87,7 @@ async def get_current_user_token(request: Request):
     except jwt.JWTClaimsError as e:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Invalid token claims: {str(e)}")
     except Exception as e:
-        print(f"JWT Verification Error Details: {str(e)}")
+        # If it's a signature error, let's log the key info (safely)
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, f"Token Verification Failed: {str(e)}")
 
 async def get_current_user(request: Request):

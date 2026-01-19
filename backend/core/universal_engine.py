@@ -264,87 +264,195 @@ class AlertConditionEvaluator:
 
 class UniversalScenarioEngine:
     """
-    Universal, schema-agnostic scenario execution engine.
-    Dynamically determines data requirements from scenario config.
+    Universal, schema-agnostic AML scenario execution engine.
+    
+    This engine dynamically determines data requirements from scenario configuration
+    and executes a multi-stage pipeline to generate alerts:
+    
+    Pipeline Stages:
+        1. Customer Field Detection - Identifies required customer fields
+        2. Smart Merge - Joins customer data only if needed
+        3. Filter Application - Applies transaction filters
+        4. Aggregation - Groups and aggregates data
+        5. Threshold Evaluation - Checks alert thresholds
+        6. Condition Evaluation - Evaluates alert conditions
+        7. Refinements - Applies smart exclusions
+    
+    The engine is designed to work with any schema by using flexible field mapping
+    and dynamic column detection.
+    
+    Attributes:
+        db_session: Database session for smart layer queries (optional)
+        filter_processor: Handles transaction filtering
+        aggregation_processor: Handles data aggregation
+        threshold_processor: Evaluates alert thresholds
+        condition_evaluator: Evaluates alert conditions
+        smart_layer: Applies intelligent exclusions (optional)
+    
+    Example:
+        >>> engine = UniversalScenarioEngine(db_session=db)
+        >>> alerts = engine.execute(
+        ...     scenario_config=scenario,
+        ...     transactions=txn_df,
+        ...     customers=cust_df,
+        ...     run_id="run-123"
+        ... )
+        >>> print(f"Generated {len(alerts)} alerts")
     """
     
     def __init__(self, db_session=None):
+        """
+        Initialize the scenario execution engine.
+        
+        Args:
+            db_session: SQLAlchemy database session for smart layer queries.
+                       If None, smart layer refinements will be skipped.
+        """
         self.db_session = db_session
         self.filter_processor = FilterProcessor()
         self.aggregation_processor = AggregationProcessor()
         self.threshold_processor = ThresholdProcessor()
         self.condition_evaluator = AlertConditionEvaluator()
-        self.smart_layer = None
-        if db_session:
-            self.smart_layer = SmartLayerProcessor(db_session)
+        self.smart_layer = SmartLayerProcessor(db_session) if db_session else None
     
     def _get_required_customer_fields(self, scenario_config: ScenarioConfigModel) -> set:
         """
-        Intelligently determines which customer fields are needed.
+        Intelligently determines which customer fields are needed for the scenario.
+        
+        Scans the scenario configuration to identify all customer-related fields
+        referenced in filters, aggregations, thresholds, and conditions. This
+        ensures smart merging - only joining customer data if actually needed.
+        
+        Args:
+            scenario_config: Validated scenario configuration
+            
+        Returns:
+            Set of customer field names required for execution
+            
+        Example:
+            >>> fields = engine._get_required_customer_fields(scenario)
+            >>> print(fields)
+            {'occupation', 'annual_income', 'risk_score'}
         """
-        required_fields = set()
+        required = set()
         
-        # 1. Filters (Handle both Object and List format)
-        filters = scenario_config.filters
-        if filters:
-            if isinstance(filters, list):
-                # Format: [{'field': 'occupation', ...}]
-                for f in filters:
-                    if isinstance(f, dict) and 'field' in f:
-                        required_fields.add(f['field'])
-                    elif hasattr(f, 'field'):
-                         required_fields.add(f.field)
-            elif hasattr(filters, 'custom_field_filters') and filters.custom_field_filters:
-                # Format: Object with custom_field_filters list
-                for cf in filters.custom_field_filters:
-                    required_fields.add(cf.field)
+        # Check filters
+        if scenario_config.filters:
+            for f in scenario_config.filters:
+                if hasattr(f, 'field') and f.field:
+                    if f.field.startswith('customer_'):
+                        required.add(f.field)
         
-        # 2. Aggregation GroupBy
-        if scenario_config.aggregation and scenario_config.aggregation.group_by:
-            for field in scenario_config.aggregation.group_by:
-                if field != 'customer_id':
-                    required_fields.add(field)
-                    
-        # 3. Threshold Segment Fields
-        if scenario_config.threshold:
-            if scenario_config.threshold.type == 'segment_based' and scenario_config.threshold.segment_based:
-                required_fields.add(scenario_config.threshold.segment_based.segment_field)
-            elif scenario_config.threshold.type == 'field_based' and scenario_config.threshold.field_based:
-                required_fields.add(scenario_config.threshold.field_based.reference_field)
-                
-        return required_fields
+        # Check aggregation group_by
+        if scenario_config.aggregation and hasattr(scenario_config.aggregation, 'group_by'):
+            for field in scenario_config.aggregation.group_by or []:
+                if field.startswith('customer_'):
+                    required.add(field)
+        
+        # Check threshold calculations
+        if scenario_config.threshold and hasattr(scenario_config.threshold, 'calculation'):
+            calc = scenario_config.threshold.calculation or ""
+            for field in ['customer_type', 'occupation', 'annual_income', 'risk_score']:
+                if field in calc:
+                    required.add(field)
+        
+        # Check alert conditions
+        if scenario_config.alert_condition and hasattr(scenario_config.alert_condition, 'expression'):
+            expr = scenario_config.alert_condition.expression or ""
+            for field in ['customer_type', 'occupation', 'annual_income', 'risk_score']:
+                if field in expr:
+                    required.add(field)
+        
+        return required
 
     def _smart_merge_customers(self, transactions: pd.DataFrame, customers: pd.DataFrame, required_fields: set) -> pd.DataFrame:
         """
         Intelligently merges customer data with transactions ONLY if required.
+        
+        Performs a left join only when customer fields are actually needed by the
+        scenario. This optimization significantly improves performance for scenarios
+        that only analyze transaction data.
+        
+        Args:
+            transactions: Transaction DataFrame
+            customers: Customer DataFrame
+            required_fields: Set of customer fields needed (from _get_required_customer_fields)
+            
+        Returns:
+            Merged DataFrame with customer fields if needed, otherwise original transactions
+            
+        Example:
+            >>> enriched = engine._smart_merge_customers(txns, custs, {'occupation'})
+            >>> assert 'occupation' in enriched.columns
         """
+        if not required_fields:
+            print("[OPTIMIZATION] No customer fields needed - skipping merge")
+            return transactions.copy()
+        
         if customers.empty:
-            print("[WARN] Customers DataFrame is empty, skipping merge")
-            return transactions
-            
-        if 'customer_id' not in transactions.columns:
-            print("[WARN] 'customer_id' not in transactions, cannot merge")
-            return transactions
-            
-        available_fields = set(customers.columns) - {'customer_id'}
-        fields_to_merge = required_fields.intersection(available_fields)
+            print("[WARN] Customer data is empty, cannot merge")
+            return transactions.copy()
         
-        if not fields_to_merge:
-            print(f"[INFO] No customer fields needed for this scenario")
-            return transactions
-            
-        print(f"[INFO] Merging customer fields: {list(fields_to_merge)}")
+        # Only select required customer columns + customer_id for join
+        customer_cols = ['customer_id'] + [f for f in required_fields if f in customers.columns]
+        customers_subset = customers[customer_cols].copy()
         
-        merge_cols = ['customer_id'] + list(fields_to_merge)
-        enriched = transactions.merge(
-            customers[merge_cols],
+        # Perform left join
+        merged = transactions.merge(
+            customers_subset,
             on='customer_id',
             how='left',
             suffixes=('', '_cust')
         )
-        return enriched
+        
+        print(f"[MERGE] Joined {len(required_fields)} customer fields")
+        return merged
 
     def execute(self, scenario_config: ScenarioConfigModel, transactions: pd.DataFrame, customers: pd.DataFrame, run_id: str) -> List[Dict]:
+        """
+        Execute an AML scenario against transaction data.
+        
+        This is the main entry point for scenario execution. It orchestrates the
+        entire pipeline from filtering to alert generation.
+        
+        Args:
+            scenario_config: Validated scenario configuration (Pydantic model)
+            transactions: Transaction DataFrame with columns:
+                - transaction_id (str, required)
+                - customer_id (str, required)
+                - transaction_date (datetime, required)
+                - transaction_amount (float, required)
+                - transaction_type, channel, etc. (optional)
+            customers: Customer DataFrame with columns:
+                - customer_id (str, required)
+                - customer_name, occupation, annual_income, etc. (optional)
+            run_id: Unique identifier for this simulation run
+            
+        Returns:
+            List of alert dictionaries, each containing:
+                - alert_id: Unique alert identifier
+                - customer_id: Customer who triggered alert
+                - customer_name: Customer name
+                - scenario_id: Scenario that generated alert
+                - scenario_name: Human-readable scenario name
+                - alert_date: Date alert was triggered
+                - risk_score: Calculated risk score
+                - trigger_details: JSON with alert details
+                - run_id: Simulation run identifier
+                
+        Raises:
+            ValueError: If required columns are missing from input DataFrames
+            
+        Example:
+            >>> alerts = engine.execute(
+            ...     scenario_config=rapid_movement_scenario,
+            ...     transactions=txn_df,
+            ...     customers=cust_df,
+            ...     run_id="run-abc-123"
+            ... )
+            >>> for alert in alerts:
+            ...     print(f"Alert for {alert['customer_name']}: {alert['risk_score']}")
+        """
         print(f"\n{'='*60}")
         print(f"[EXECUTE] Scenario: {scenario_config.scenario_name}")
         

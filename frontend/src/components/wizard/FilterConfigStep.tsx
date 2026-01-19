@@ -13,6 +13,7 @@ export default function FilterConfigStep() {
     const [validating, setValidating] = useState(false);
     const [validationResult, setValidationResult] = useState<{
         match_count: number;
+        match_count_customers?: number;
         total_records: number;
         status: string;
     } | null>(null);
@@ -244,10 +245,13 @@ export default function FilterConfigStep() {
                     className="border border-opacity-20"
                 >
                     <div className="font-semibold">
-                        {validationResult.match_count} matches found
+                        {validationResult.match_count} transactions found
                     </div>
                     <div className="text-xs opacity-90">
-                        out of {validationResult.total_records} total records in your current dataset.
+                        {validationResult.match_count_customers !== undefined && (
+                            <span className="font-medium">from {validationResult.match_count_customers} distinct customers </span>
+                        )}
+                        (out of {validationResult.total_records} total transactions)
                     </div>
                 </Alert>
             )}
