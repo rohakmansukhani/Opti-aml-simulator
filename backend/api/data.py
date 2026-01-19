@@ -160,62 +160,77 @@ async def upload_transactions(
     }
 
 @router.get("/schema")
-async def get_data_schema(db: Session = Depends(get_db)):
+async def get_data_schema(
+    db: Session = Depends(get_db),
+    user_id: str = Depends(get_current_user_id)
+):
     """
-    Returns the schema (columns) for Transactions and Customers by introspecting the current database.
+    Returns the schema (columns) for Transactions and Customers by extracting field names
+    from raw_data JSONB of the user's most recent upload.
+    
+    This enables schema-agnostic uploads - the system discovers fields dynamically
+    from the uploaded CSV data rather than relying on fixed database columns.
     """
-    engine = db.get_bind()
-    inspector = inspect(engine)
+    from models import Transaction, Customer, DataUpload
     
     schema_response = {"transactions": [], "customers": []}
-
-    # Map SQL types to UI types
-    def map_type(sql_type):
-        s = str(sql_type).lower()
-        if 'int' in s:
-            return 'integer'
-        if 'numeric' in s or 'float' in s or 'real' in s or 'decimal' in s:
-            return 'float'
-        if 'datetime' in s or 'timestamp' in s:
-            return 'datetime'
-        if 'date' in s:
-            return 'date'
+    
+    # Helper function to infer type from value
+    def infer_type(value):
+        if value is None:
+            return 'string'
+        if isinstance(value, (int, float)):
+            return 'number' if isinstance(value, float) else 'integer'
+        if isinstance(value, bool):
+            return 'boolean'
+        # Try to parse as number
+        try:
+            float(str(value))
+            return 'number'
+        except:
+            pass
         return 'string'
-
     
-    # Filter out internal/system columns
-    IGNORED_COLUMNS = {'created_at', 'updated_at', 'id', 'raw_data', 'hash_key', 'run_id'}
-
-    if inspector.has_table('transactions'):
-        cols = inspector.get_columns('transactions')
-        schema_response["transactions"] = [
-            {
-                "name": col['name'], 
-                "type": map_type(col['type']), 
-                "label": col['name'].replace('_', ' ').title(),
-                "sql_type": str(col['type'])
-            }
-            for col in cols
-            if col['name'].lower() not in IGNORED_COLUMNS
-        ]
+    # Get user's most recent upload
+    latest_upload = db.query(DataUpload).filter(
+        DataUpload.user_id == user_id
+    ).order_by(DataUpload.upload_timestamp.desc()).first()
     
-    if inspector.has_table('customers'):
-        cols = inspector.get_columns('customers')
-        schema_response["customers"] = [
-            {
-                "name": col['name'], 
-                "type": map_type(col['type']), 
-                "label": col['name'].replace('_', ' ').title(),
-                "sql_type": str(col['type'])
-            }
-            for col in cols
-            if col['name'].lower() not in IGNORED_COLUMNS
-        ]
-        
-    # Fallback to hardcoded if tables not found (e.g. initial empty sqlite)
-    # This prevents UI breaking before first upload
+    if not latest_upload:
+        # Return empty schema if no uploads yet
+        return schema_response
+    
+    # Extract transaction fields from raw_data
+    sample_txn = db.query(Transaction).filter(
+        Transaction.upload_id == latest_upload.upload_id
+    ).first()
+    
+    if sample_txn and sample_txn.raw_data:
+        for field_name, field_value in sample_txn.raw_data.items():
+            schema_response["transactions"].append({
+                "name": field_name,
+                "type": infer_type(field_value),
+                "label": field_name.replace('_', ' ').title(),
+                "sql_type": infer_type(field_value)
+            })
+    
+    # Extract customer fields from raw_data
+    sample_cust = db.query(Customer).filter(
+        Customer.upload_id == latest_upload.upload_id
+    ).first()
+    
+    if sample_cust and sample_cust.raw_data:
+        for field_name, field_value in sample_cust.raw_data.items():
+            schema_response["customers"].append({
+                "name": field_name,
+                "type": infer_type(field_value),
+                "label": field_name.replace('_', ' ').title(),
+                "sql_type": infer_type(field_value)
+            })
+    
+    # Fallback to basic schema if no data found
     if not schema_response["transactions"] and not schema_response["customers"]:
-         return {
+        return {
             "transactions": [
                 {"name": "transaction_amount", "type": "number", "label": "Transaction Amount"},
                 {"name": "transaction_type", "type": "string", "label": "Transaction Type"},
