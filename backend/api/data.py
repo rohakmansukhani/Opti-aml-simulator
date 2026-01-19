@@ -1,13 +1,16 @@
 from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
 from sqlalchemy.orm import Session
+from sqlalchemy import text, inspect
+from datetime import datetime
+import pandas as pd
+import io
+
 from database import get_db
 from services.data_ingestion import DataIngestionService
 from models import Transaction, DataUpload
 from core.upload_validator import UploadValidator
 from core.ttl_manager import TTLManager
 from auth import get_current_user
-import pandas as pd
-import io
 
 router = APIRouter(prefix="/api/data", tags=["Data"])
 
@@ -46,9 +49,6 @@ async def upload_transactions(
             })
         
         # CHECK FOR EXISTING DATA
-        from sqlalchemy import text
-        from datetime import datetime
-        
         existing_upload = db.execute(
             text("""
                 SELECT upload_id, expires_at, record_count_transactions, filename
@@ -147,8 +147,6 @@ async def get_data_schema(db: Session = Depends(get_db)):
     """
     Returns the schema (columns) for Transactions and Customers by introspecting the current database.
     """
-    from sqlalchemy import inspect
-    
     engine = db.get_bind()
     inspector = inspect(engine)
     
@@ -241,7 +239,6 @@ async def upload_customers(
         raise HTTPException(400, str(e))
     
     if valid_records:
-        from models import Customer
         df = pd.DataFrame(valid_records)
         
         # SIZE VALIDATION
@@ -256,9 +253,6 @@ async def upload_customers(
             })
         
         # CHECK FOR EXISTING DATA
-        from sqlalchemy import text
-        from datetime import datetime
-        
         existing_upload = db.execute(
             text("""
                 SELECT upload_id, expires_at, record_count_customers, filename
@@ -364,9 +358,6 @@ async def get_field_values(
     Returns distinct values for a specific field to power UI autocomplete.
     Searches both Transactions and Customers tables.
     """
-    # Optimized: Try Querying Tables Directly
-    # Faster than introspecting schema on every keystroke
-    
     potential_tables = ['transactions', 'customers']
 
     for table in potential_tables:
@@ -401,7 +392,6 @@ async def get_field_values(
             
         except Exception as e:
             # Column likely doesn't exist in this table, try next
-            # CRITICAL: Rollback the transaction to prevent "InFailedSqlTransaction" error
             db.rollback()
             print(f"[DEBUG] Error querying {table}.{field}: {e}")
             continue
@@ -417,13 +407,6 @@ async def extend_ttl(
 ):
     """
     Extend the TTL for uploaded data.
-    
-    Args:
-        upload_id: The upload ID to extend
-        additional_hours: Hours to add (default 24)
-    
-    Returns:
-        Success status and new expiry time
     """
     success = TTLManager.extend_ttl(db, upload_id, additional_hours)
     
@@ -431,7 +414,6 @@ async def extend_ttl(
         raise HTTPException(404, "Upload not found")
     
     # Get updated expiry
-    from sqlalchemy import text
     result = db.execute(
         text("SELECT expires_at FROM data_uploads WHERE upload_id = :id"),
         {"id": upload_id}
@@ -443,4 +425,3 @@ async def extend_ttl(
         "new_expires_at": result[0].isoformat() if result else None,
         "hours_added": additional_hours
     }
-

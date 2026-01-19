@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { useState } from 'react';
 import { supabase } from '@/lib/supabase';
+import { Tooltip } from '@mui/material';
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
     const pathname = usePathname();
@@ -77,10 +78,14 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                         <div className="w-10 h-10 rounded-full bg-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-sm">
                             {useSessionStore.getState().user?.email?.[0].toUpperCase() || 'U'}
                         </div>
-                        <div className="ml-3 overflow-hidden">
-                            <div className="text-xs font-semibold text-slate-900 truncate">
-                                {useSessionStore.getState().user?.email || 'User'}
-                            </div>
+                        <div className="ml-3 overflow-hidden flex-1">
+                            <Tooltip title={useSessionStore.getState().user?.email || 'User'} arrow placement="right">
+                                <div
+                                    className="text-xs font-semibold text-slate-900 break-all line-clamp-1 cursor-help"
+                                >
+                                    {useSessionStore.getState().user?.email || 'User'}
+                                </div>
+                            </Tooltip>
                             <div className="text-[10px] text-slate-500 uppercase tracking-wider font-medium">
                                 Active Account
                             </div>

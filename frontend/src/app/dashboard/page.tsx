@@ -11,8 +11,10 @@ import {
     ShieldAlert,
     TrendingUp,
     Activity,
-    ArrowRight
+    ArrowRight,
+    Database
 } from 'lucide-react';
+import { formatDateIST } from '@/lib/date-utils';
 import {
     Card,
     CardContent,
@@ -214,7 +216,7 @@ export default function Dashboard() {
                                 <div key={run.run_id} onClick={() => router.push('/dashboard/reports')} className="px-6 py-4 flex items-center justify-between hover:bg-slate-50 cursor-pointer">
                                     <div>
                                         <div className="font-medium text-slate-900">Simulation Run #{seqId}</div>
-                                        <div className="text-sm text-slate-500">{new Date(run.created_at).toLocaleDateString()} • {run.total_alerts} Alerts</div>
+                                        <div className="text-sm text-slate-500">{formatDateIST(run.created_at)} • {run.total_alerts} Alerts</div>
                                     </div>
                                     <span className={`px-2 py-1 rounded-full text-xs font-bold ${run.status === 'completed' ? 'bg-green-100 text-green-700' : 'bg-blue-100 text-blue-700'}`}>{run.status}</span>
                                 </div>

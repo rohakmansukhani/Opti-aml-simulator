@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Clock, AlertCircle } from 'lucide-react';
 import { Button } from '@mui/material';
+import { formatIST } from '@/lib/date-utils';
 
 interface TTLCountdownProps {
     expiresAt: string; // ISO timestamp
@@ -61,16 +62,16 @@ export function TTLCountdown({ expiresAt, uploadId, onExtend }: TTLCountdownProp
 
     return (
         <div className={`border rounded-lg p-3 flex items-center gap-3 ${isWarning
-                ? 'bg-amber-50 border-amber-200'
-                : 'bg-blue-50 border-blue-200'
+            ? 'bg-amber-50 border-amber-200'
+            : 'bg-blue-50 border-blue-200'
             }`}>
             <Clock className={isWarning ? 'text-amber-600' : 'text-blue-600'} size={20} />
             <div className="flex-1">
                 <p className="text-sm font-semibold text-slate-900">
                     {isWarning ? 'Expiring Soon' : 'Data Active'}
                 </p>
-                <p className="text-xs text-slate-600">
-                    {timeRemaining} remaining • Auto-deletes after 48 hours
+                <p className="text-xs text-slate-600" title={`Expires at: ${formatIST(expiresAt)}`}>
+                    {timeRemaining} remaining • Auto-deletes after 48h
                 </p>
             </div>
             {onExtend && isWarning && (

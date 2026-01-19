@@ -5,6 +5,7 @@ import { api } from '@/lib/api';
 import { useRouter } from 'next/navigation';
 import { useState } from 'react';
 import { Loader2, CheckCircle2, FileJson, AlertTriangle } from 'lucide-react';
+import { formatDateIST } from '@/lib/date-utils';
 import { MappingModal } from '@/components/ui/MappingModal';
 
 export default function ReviewStep() {
@@ -250,7 +251,8 @@ export default function ReviewStep() {
                                                 </div>
                                             </div>
                                             <span className="text-xs bg-slate-100 text-slate-600 px-2 py-1 rounded font-mono">
-                                                {new Date(alert.alert_date).toLocaleDateString()}
+                                                <span className="font-semibold text-slate-900">Date Triggered:</span>{' '}
+                                                {formatDateIST(alert.alert_date)}
                                             </span>
                                         </div>
                                     </div>

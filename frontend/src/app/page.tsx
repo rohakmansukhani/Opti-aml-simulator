@@ -7,6 +7,7 @@ import { useSessionStore } from '@/store/useSessionStore';
 import { useRouter } from 'next/navigation';
 import { UploadCloud, Database, ArrowRight, Loader2, CheckCircle2, Mail, AlertTriangle } from 'lucide-react';
 import { supabase } from '@/lib/supabase';
+import { formatDateIST, formatIST } from '@/lib/date-utils';
 import { DatasetTooLargeModal } from '@/components/DatasetTooLargeModal';
 import { TTLCountdown } from '@/components/TTLCountdown';
 
@@ -459,7 +460,8 @@ export default function BootScreen() {
                             <p className="flex justify-between mb-2">
                                 <span className="text-slate-500">Expires At:</span>
                                 <span className="font-medium text-slate-900">
-                                    {new Date(conflictError.expiresAt).toLocaleString()}
+                                    <span className="font-semibold">Expiry (IST):</span>{' '}
+                                    {formatIST(conflictError.expiresAt)}
                                 </span>
                             </p>
                             <p className="text-amber-700 text-xs mt-2 italic">

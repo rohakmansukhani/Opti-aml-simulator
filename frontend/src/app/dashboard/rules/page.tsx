@@ -22,7 +22,8 @@ import {
     CircularProgress,
     Alert
 } from '@mui/material';
-import { Edit, Trash2, Search } from 'lucide-react';
+import { Edit, Trash2, Search, CheckCircle2, Info, Calendar } from 'lucide-react';
+import { formatDateIST } from '@/lib/date-utils';
 
 interface Scenario {
     scenario_id: string;
@@ -166,8 +167,9 @@ export default function RulesPage() {
                                             size="small"
                                         />
                                     </TableCell>
-                                    <TableCell className="text-slate-600">
-                                        {new Date(scenario.updated_at).toLocaleDateString()}
+                                    <TableCell className="text-slate-600 flex items-center">
+                                        <Calendar size={12} className="mr-1" />
+                                        {formatDateIST(scenario.updated_at)}
                                     </TableCell>
                                     <TableCell className="text-right">
                                         <IconButton

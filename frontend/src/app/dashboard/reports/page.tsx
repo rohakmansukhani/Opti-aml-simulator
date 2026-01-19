@@ -21,6 +21,7 @@ import {
     Paper
 } from '@mui/material';
 import { FileText, Download, Calendar, TrendingUp } from 'lucide-react';
+import { formatDateIST, formatIST } from '@/lib/date-utils';
 
 interface ReportSummary {
     total_scenarios: number;
@@ -226,7 +227,7 @@ export default function ReportsPage() {
                                 <Calendar size={20} className="text-purple-500" />
                             </div>
                             <div className="text-sm font-bold text-slate-900">
-                                {summary.last_run !== 'Never' ? new Date(summary.last_run).toLocaleDateString() : 'Never'}
+                                {summary.last_run !== 'Never' ? formatDateIST(summary.last_run) : 'Never'}
                             </div>
                         </CardContent>
                     </Card>
@@ -269,7 +270,7 @@ export default function ReportsPage() {
                                 <div className="text-xs font-mono text-slate-400 mb-3 select-all">ID: {report.report_id}</div>
                                 <div className="flex items-center text-sm text-slate-500 mb-4">
                                     <Calendar size={14} className="mr-1.5" />
-                                    {new Date(report.created_at).toLocaleString()}
+                                    {formatIST(report.created_at)}
                                 </div>
 
                                 <div className="bg-slate-50 p-3 rounded mb-4 text-sm flex justify-between">
@@ -340,7 +341,8 @@ export default function ReportsPage() {
                                                 </span>
                                             </TableCell>
                                             <TableCell className="text-slate-500 text-sm">
-                                                {new Date(alert.alert_date).toLocaleDateString()}
+                                                <span className="font-semibold text-slate-900">Date Triggered:</span>{' '}
+                                                {formatDateIST(alert.alert_date)}
                                             </TableCell>
                                         </TableRow>
                                     ))}
