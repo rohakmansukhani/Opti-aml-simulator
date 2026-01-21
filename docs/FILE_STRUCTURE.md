@@ -44,39 +44,15 @@ sas simulator/
 │   ├── .dockerignore                 # Docker ignore patterns
 │   └── pyproject.toml                # Pytest & coverage config
 │
-├── frontend/                         # Next.js React frontend
-│   ├── src/
-│   │   ├── app/                      # Next.js 13+ App Router
-│   │   │   ├── page.tsx              # Landing & auth page
-│   │   │   ├── layout.tsx            # Root layout
-│   │   │   └── dashboard/            # Dashboard pages
-│   │   │       ├── page.tsx          # Dashboard home
-│   │   │       └── reports/          # Simulation reports
-│   │   │           └── page.tsx
-│   │   │
-│   │   ├── components/               # Reusable components
-│   │   │   └── TTLCountdown.tsx      # Data expiry countdown
-│   │   │
-│   │   ├── lib/                      # Utilities
-│   │   │   └── api.ts                # Axios API client
-│   │   │
-│   │   └── store/                    # State management
-│   │       └── useSessionStore.ts    # Zustand session store
-│   │
-│   ├── public/                       # Static assets
-│   ├── README.md                     # Frontend documentation
-│   ├── package.json                  # Node dependencies
-│   ├── next.config.js                # Next.js configuration
-│   ├── tailwind.config.ts            # Tailwind CSS config
-│   └── Dockerfile                    # Production build
-│
 ├── docs/                             # Documentation
-│   └── mermaid_flowchart.md          # System architecture diagrams
+│   ├── ARCHITECTURE.md               # System Architecture
+│   ├── PRD.md                        # Product Requirements
+│   ├── API_TESTING.md                # API Curl Tests
+│   └── ...
 │
 ├── docker-compose.yml                # Full stack orchestration
 ├── .env.example                      # Environment template
-├── README.md                         # Main project README
-└── mermaid_flowchart.md              # Flowcharts & diagrams
+└── README.md                         # Main project README
 ```
 
 ## 🎯 Key Principles
@@ -104,11 +80,6 @@ sas simulator/
 - **PascalCase** for classes: `UniversalScenarioEngine`
 - **snake_case** for functions: `execute_scenarios()`
 
-### Frontend (TypeScript/React)
-- **PascalCase** for components: `TTLCountdown.tsx`
-- **camelCase** for utilities: `api.ts`
-- **kebab-case** for routes: `dashboard/reports/`
-
 ## 🔍 Finding Code
 
 ### "Where is the simulation logic?"
@@ -117,33 +88,19 @@ sas simulator/
 ### "Where are the API endpoints?"
 → `backend/api/` (organized by domain)
 
-### "Where is the frontend dashboard?"
-→ `frontend/src/app/dashboard/page.tsx`
-
 ### "Where are the tests?"
 → `backend/tests/`
 
 ### "Where is the Docker setup?"
-→ `docker-compose.yml` + `Dockerfile` in backend/frontend
+→ `docker-compose.yml` + `Dockerfile` in backend
 
 ## 🚀 Quick Start Paths
 
-### Run Full Stack:
-```bash
-docker-compose up -d
-```
-
-### Run Backend Only:
+### Run Backend:
 ```bash
 cd backend
 source venv/bin/activate
 uvicorn main:app --reload
-```
-
-### Run Frontend Only:
-```bash
-cd frontend
-npm run dev
 ```
 
 ### Run Tests:
@@ -152,53 +109,14 @@ cd backend
 pytest tests/ -v
 ```
 
-## 📊 Data Flow Through Files
-
-```
-1. User uploads CSV
-   → frontend/src/app/dashboard/page.tsx
-   → backend/api/data.py (upload_transactions)
-   → backend/services/data_ingestion_service.py
-   → backend/core/ttl_manager.py
-   → backend/models.py (Transaction, DataUploads)
-
-2. User runs simulation
-   → frontend/src/app/dashboard/page.tsx
-   → backend/api/simulation.py (start_simulation)
-   → backend/services/simulation_service.py
-   → backend/core/universal_engine.py
-   → backend/core/smart_layer.py
-   → backend/core/risk_engine.py
-   → backend/models.py (Alert, SimulationRun)
-
-3. User views results
-   → frontend/src/app/dashboard/reports/page.tsx
-   → backend/api/dashboard.py (get_dashboard_stats)
-   → backend/models.py (queries)
-```
-
 ## 🔧 Configuration Files
 
 | File | Purpose |
 |------|---------|
-| `backend/requirements.txt` | Python dependencies |
+| `backend/requirements.txt` | Backend Python dependencies |
 | `backend/pyproject.toml` | Pytest & coverage config |
-| `frontend/package.json` | Node dependencies |
-| `frontend/next.config.js` | Next.js configuration |
-| `frontend/tailwind.config.ts` | Tailwind CSS setup |
 | `docker-compose.yml` | Multi-service orchestration |
 | `.env.example` | Environment variables template |
-
-## 📚 Documentation Files
-
-| File | Content |
-|------|---------|
-| `README.md` (root) | Project overview & quick start |
-| `backend/core/README.md` | Core modules documentation |
-| `backend/api/README.md` | API endpoints documentation |
-| `frontend/README.md` | Frontend structure & components |
-| `mermaid_flowchart.md` | System architecture diagrams |
-| `docs/ARCHITECTURE.md` | (TODO) Detailed architecture |
 
 ## 🎨 Asset Organization
 
@@ -207,11 +125,6 @@ pytest tests/ -v
 - Logs → `logs/` (gitignored)
 - Uploads → Database (TTL managed)
 
-### Frontend
-- Images → `frontend/public/images/`
-- Icons → Lucide React (no files)
-- Styles → Tailwind (utility classes)
-
 ## 🔐 Security Files
 
 | File | Purpose | Gitignored? |
@@ -219,4 +132,3 @@ pytest tests/ -v
 | `.env` | Environment secrets | ✅ Yes |
 | `.env.example` | Template (no secrets) | ❌ No |
 | `backend/auth.py` | JWT validation | ❌ No |
-| `frontend/src/lib/api.ts` | API client | ❌ No |
