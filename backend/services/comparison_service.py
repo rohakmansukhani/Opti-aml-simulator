@@ -18,6 +18,7 @@ from typing import Dict, List, Any
 from sqlalchemy.orm import Session
 from models import Alert, SimulationRun
 import structlog
+import uuid
 
 logger = structlog.get_logger("comparison_engine")
 
@@ -37,19 +38,19 @@ class ComparisonEngine:
         refined_run_id: str
     ) -> Dict[str, Any]:
         """
-        Main comparison method.
-        
-        Args:
-            baseline_run_id: Run ID without refinements
-            refined_run_id: Run ID with refinements applied
-            
-        Returns:
-            {
-                "summary": {...},
-                "granular_diff": [...],
-                "risk_analysis": {...}
-            }
+        Main comparison method. Persists results to DB.
         """
+        # 0. Check for existing comparison
+        from models import SimulationComparison
+        existing = self.db.query(SimulationComparison).filter(
+            SimulationComparison.base_run_id == baseline_run_id,
+            SimulationComparison.challenger_run_id == refined_run_id
+        ).first()
+        
+        if existing and existing.comparison_details:
+            logger.info("comparison_cache_hit", comparison_id=existing.comparison_id)
+            return existing.comparison_details
+
         logger.info(
             "comparison_started",
             baseline_run_id=baseline_run_id,
@@ -76,13 +77,7 @@ class ComparisonEngine:
             granular_diff
         )
         
-        logger.info(
-            "comparison_completed",
-            reduction_pct=summary["percent_reduction"],
-            risk_level=risk_analysis["risk_level"]
-        )
-        
-        return {
+        result_json = {
             "summary": summary,
             "granular_diff": granular_diff,
             "risk_analysis": risk_analysis,
@@ -92,6 +87,28 @@ class ComparisonEngine:
                 "comparison_type": "customer_centric"
             }
         }
+        
+        # Persist to DB
+        try:
+            # Efficiency Score calculation (Simple: % reduction * (1 - risk score/100))
+            eff_score = summary['percent_reduction'] * (1 - (risk_analysis['risk_score'] / 100))
+            
+            comparison_record = SimulationComparison(
+                comparison_id=str(uuid.uuid4()),
+                base_run_id=baseline_run_id,
+                challenger_run_id=refined_run_id,
+                alerts_delta=summary['net_change'],
+                efficiency_score=eff_score,
+                overlap_count=summary['refined_alerts'], # Approximation assuming refined is subset
+                comparison_details=result_json
+            )
+            self.db.add(comparison_record)
+            self.db.commit()
+        except Exception as e:
+            logger.error("comparison_persist_failed", error=str(e))
+            self.db.rollback()
+        
+        return result_json
     
     def _load_alerts(self, run_id: str) -> List[Alert]:
         """

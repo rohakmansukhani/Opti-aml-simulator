@@ -7,7 +7,7 @@ Provides endpoints for:
 - Administrative operations
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 from database import get_service_engine
 from core.ttl_manager import TTLManager
@@ -17,8 +17,19 @@ from typing import Dict, Any
 router = APIRouter(prefix="/api/admin", tags=["Admin"])
 
 
+from models import AuditLog
+import uuid
+from core.rate_limiting import limiter
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+
+# If core.rate_limiting import fails or we want local isolation:
+# limiter = Limiter(key_func=get_remote_address) 
+
 @router.post("/cleanup-ttl")
+@limiter.limit("5/hour")
 async def manual_cleanup(
+    request: Request, # Required by slowapi
     dry_run: bool = True,  # Default to dry-run for safety
     current_user: dict = Depends(get_current_user)
 ) -> Dict[str, Any]:
@@ -27,33 +38,37 @@ async def manual_cleanup(
     
     Allows administrators to manually trigger the TTL cleanup process
     instead of waiting for the scheduled Celery task.
-    
-    Args:
-        dry_run: If True, simulates cleanup without making changes (default: True)
-        current_user: Authenticated user (from JWT token)
-        
-    Returns:
-        Cleanup results including counts of anonymized/deleted records
-        
-    Raises:
-        HTTPException: If cleanup fails
-        
-    Example:
-        # Dry run (safe)
-        POST /api/admin/cleanup-ttl?dry_run=true
-        
-        # Actual cleanup (use with caution)
-        POST /api/admin/cleanup-ttl?dry_run=false
     """
     
     # Optional: Add admin role check
-    # if current_user.get("role") != "admin":
-    #     raise HTTPException(status_code=403, detail="Admin access required")
+    # In production, check for specific role claim
+    if current_user.get("role") not in ["admin", "superuser"]:
+        print(f"Unauthorized admin access attempt: {current_user}")
+        raise HTTPException(status_code=403, detail="Admin access required")
     
-    db = get_service_engine()()
+    # Use proper dependency injection if possible, or context manager
+    # Here we stick to get_service_engine but ensure closure via final block
+    
+    sess_gen = get_service_engine()
+    db = sess_gen()
     
     try:
         result = TTLManager.cleanup_expired(db, dry_run=dry_run)
+        
+        # Audit Log
+        if not dry_run:
+            try:
+                audit = AuditLog(
+                    log_id=str(uuid.uuid4()),
+                    user_id=current_user.get("sub"),
+                    action_type="ttl_cleanup_manual",
+                    details={"dry_run": dry_run, "result": result}
+                )
+                db.add(audit)
+                db.commit()
+            except Exception as e:
+                print(f"Failed to write audit log: {e}")
+                # Don't fail the main request
         
         return {
             "status": "success",

@@ -173,11 +173,14 @@ class SmartLayerProcessor:
                     continue
                 
                 # Vectorized: Find all transactions matching keywords
-                keyword_pattern = '|'.join(all_keywords)
+                # Optimization: Pre-compile regex
+                import re
+                keyword_pattern = '|'.join(map(re.escape, all_keywords)) # Escape to prevent regex injection errors
+                compiled_regex = re.compile(keyword_pattern, re.IGNORECASE)
+                
                 matching_txns = transactions[
                     transactions['transaction_narrative'].str.contains(
-                        keyword_pattern, 
-                        case=False, 
+                        compiled_regex, 
                         na=False,
                         regex=True
                     )

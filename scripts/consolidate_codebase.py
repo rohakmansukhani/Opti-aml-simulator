@@ -1,6 +1,6 @@
 import os
 
-def consolidate_files(output_file="copy.py"):
+def consolidate_files(output_file="codebase_dump.py"):
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     
     files_to_process = []

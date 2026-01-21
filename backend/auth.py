@@ -4,27 +4,34 @@ from jose import jwt, jwk
 import requests
 from functools import lru_cache
 
-# Cache JWKS to avoid fetch on every request
-@lru_cache(maxsize=1)
+from datetime import datetime, timedelta
+
+# Cache JWKS with 1-hour TTL
+_jwks_cache = {"data": None, "expires_at": None}
+
 def get_jwks():
+    now = datetime.now()
+    if _jwks_cache["data"] and _jwks_cache["expires_at"] and _jwks_cache["expires_at"] > now:
+        return _jwks_cache["data"]
+
     supabase_url = os.environ.get("SUPABASE_URL")
     if not supabase_url:
         raise ValueError("SUPABASE_URL not set")
     
-    # JWKS endpoint: {PROJECT_URL}/rest/v1/.well-known/jwks.json
-    # Note: Check if project uses custom domain or standard supabase.co
-    # Standard: https://[project-ref].supabase.co/auth/v1/.well-known/jwks.json
-    # Or sometimes at root. Bento docs say "validates using Supabase JWKS".
-    
-    # Try the standard Auth path
+    # JWKS endpoint logic
     jwks_url = f"{supabase_url}/auth/v1/.well-known/jwks.json"
     try:
         response = requests.get(jwks_url)
         response.raise_for_status()
-        return response.json()
+        data = response.json()
+        
+        # Update Cache
+        _jwks_cache["data"] = data
+        _jwks_cache["expires_at"] = now + timedelta(hours=1)
+        
+        return data
     except Exception as e:
         print(f"Failed to fetch JWKS: {e}")
-        # Fallback/Retry logic could go here
         raise e
 
 async def get_current_user_token(request: Request):

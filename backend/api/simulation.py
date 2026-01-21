@@ -10,6 +10,8 @@ from pydantic import BaseModel
 from database import get_db, _get_engine, DEFAULT_DB_URL, resolve_db_url, get_service_engine
 from services.simulation_service import SimulationService
 from auth import get_current_user
+from models import DataUpload, Customer
+from datetime import datetime, timezone
 
 def run_simulation_background(run_id: str, db_url: str):
     # Use service role for background system operations to bypass RLS
@@ -111,6 +113,13 @@ async def start_simulation(
             "end": request.date_range_end.isoformat() if request.date_range_end else None
         }
     }
+    
+    # ✅ Explicitly save Date Ranges to columns
+    if request.date_range_start:
+        run.date_range_start = request.date_range_start
+    if request.date_range_end:
+        run.date_range_end = request.date_range_end
+        
     db.commit()
     
     background_tasks.add_task(run_simulation_background, run.run_id, target_url)
@@ -247,108 +256,115 @@ async def export_run_results(
 
 @router.post("/preview")
 async def preview_scenario(
-    config: dict,
-    user_data: dict = Depends(get_current_user),
-    db: Session = Depends(get_db)
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_user: dict = Depends(get_current_user)
 ):
     """
-    Test a scenario configuration on a sample dataset WITHOUT saving it.
+    Test scenario logic - returns sample alerts without saving to DB
     """
-    import pandas as pd
-    from models import Transaction
-    from core.universal_engine import UniversalScenarioEngine
-    from core.config_models import ScenarioConfigModel
-
     try:
-        from models import DataUpload
-        user_id = user_data.get("sub")
+        user_id = current_user.get('sub')
+        limit = payload.get('limit', 5)
         
-        # Load last 1000 transactions via ORM (Scoped to User)
-        txns = db.query(Transaction).join(DataUpload).filter(
-            DataUpload.user_id == user_id
-        ).order_by(
-            Transaction.transaction_date.desc()
-        ).limit(1000).all()
+        # Get active upload
+        active_upload = db.query(DataUpload).filter(
+            DataUpload.user_id == user_id,
+            DataUpload.status == 'active',
+            DataUpload.expires_at > datetime.now(timezone.utc)
+        ).order_by(DataUpload.upload_timestamp.desc()).first()
         
-        if not txns:
-             return {"status": "no_data", "message": "No transactions found for your account. Please upload data first."}
+        if not active_upload:
+            return {
+                "status": "no_data",
+                "message": "No active data upload found"
+            }
         
-        # Determine customers involved in these transactions
-        customer_ids = {t.customer_id for t in txns}
+        # Initialize Service
+        from services.simulation_service import SimulationService
+        service = SimulationService(db)
         
-        # Load associated customers
-        from models import Customer
-        customers_orm = db.query(Customer).filter(
-            Customer.customer_id.in_(customer_ids),
-            Customer.upload_id.in_([t.upload_id for t in txns]) # Ensure same upload scope
-        ).all()
+        # Build theoretical scenario config
+        scenario_config = {
+            "scenario_id": payload.get('scenario_id', 'PREVIEW_TEST'),
+            "scenario_name": payload.get('scenario_name', 'Preview Test'),
+            "config_json": payload.get('config_json', {}),
+            "priority": "MEDIUM",
+            "is_active": True,
+            "field_mappings": payload.get('field_mappings') # Pass mappings if any
+        }
         
-        # Convert Customers to DataFrame
-        customers_df = pd.DataFrame([{
-            'customer_id': c.customer_id,
-            'customer_name': c.customer_name,
-            'occupation': c.occupation,
-            'annual_income': float(c.annual_income) if c.annual_income else 0,
-            'risk_score': float(c.risk_score) if c.risk_score else 0,
-            'customer_type': c.customer_type,
-            'residence_country': c.residence_country
-        } for c in customers_orm])
+        # Get customer list for this user (via DataUpload join)
+        customers = db.query(Customer.customer_id).join(
+            DataUpload, Customer.upload_id == DataUpload.upload_id
+        ).filter(
+            DataUpload.user_id == user_id,
+            Customer.upload_id == active_upload.upload_id
+        ).distinct().all()
         
-        # Convert Transactions to DataFrame
-        df = pd.DataFrame([{
-            'transaction_id': t.transaction_id,
-            'customer_id': t.customer_id,
-            'transaction_amount': float(t.transaction_amount),
-            'transaction_date': t.transaction_date,
-            'transaction_type': t.transaction_type,
-            'channel': t.channel,
-            'debit_credit_indicator': t.debit_credit_indicator
-        } for t in txns])
+        customer_ids = [c[0] for c in customers]
         
-        # Run engine
-        engine = UniversalScenarioEngine(db)
+        if not customer_ids:
+            return {
+                "status": "no_data",
+                "message": "No customers found in active upload"
+            }
         
-        # Apply Field Mappings if provided in config
-        if 'field_mappings' in config and config['field_mappings']:
-            from core.field_mapper import apply_field_mappings_to_df
-            df = apply_field_mappings_to_df(df, config['field_mappings'])
+        # Run simulation in preview mode (dry run, no DB writes)
+        # Limit to 20 customers for preview speed
+        print(f"[PREVIEW] Running scenario for sample of {min(20, len(customer_ids))} customers")
         
-        # Convert config dict to ScenarioConfigModel
-        # Handle simple vs full config structure
-        config_data = config.get('config_json', config)
+        alerts_df = service._execute_single_scenario(
+            scenario_config=scenario_config,
+            customer_ids=customer_ids[:20],
+            upload_id=active_upload.upload_id,
+            run_id='preview_run',
+            user_id=user_id
+        )
         
-        # For preview mode, add default values for required fields if missing
-        if 'scenario_id' not in config_data:
-            import uuid
-            config_data['scenario_id'] = 'preview-' + str(uuid.uuid4())[:8]
-        if 'scenario_name' not in config_data:
-            config_data['scenario_name'] = 'Preview Test'
+        if alerts_df is None or alerts_df.empty:
+            return {
+                "status": "success",
+                "alert_count": 0,
+                "sample_alerts": [],
+                "sample_size": len(customer_ids),
+                "estimated_monthly_volume": 0,
+                "message": "No alerts generated with current configuration"
+            }
         
-        # Ensure we have a valid model even if partial config sent
-        try:
-            scenario = ScenarioConfigModel(**config_data)
-        except Exception as e:
-            # Fallback for manual construction if pydantic validation fails strictly
-            # or if frontend sends partial data. 
-            # Ideally we want strictly valid data, but for preview we can be lenient.
-            # Reraise for now to catching validation errors.
-            raise ValueError(f"Invalid Config: {e}")
-
-        # Execute on sample with partial customer data
-        alerts = engine.execute(scenario, df, customers_df, 'PREVIEW')
+        # Convert to sample alerts
+        sample_alerts = []
+        for _, row in alerts_df.head(limit).iterrows():
+            # Check if alert_date is a Timestamp or datetime object
+            a_date = row.get('alert_date', datetime.now())
+            if hasattr(a_date, 'isoformat'):
+                a_date = a_date.isoformat()
+            else:
+                a_date = str(a_date)
+                
+            sample_alerts.append({
+                "customer_id": str(row.get('customer_id')),
+                "alert_date": a_date,
+                "trigger_details": {
+                    "aggregated_value": float(row.get('aggregated_value', 0)) if row.get('aggregated_value') else 0,
+                    "transaction_count": int(row.get('transaction_count', 0)) if row.get('transaction_count') else 0
+                }
+            })
         
-        estimated_monthly = int((len(alerts) / 30) * 30) # Rough estimate on 1000 rows? 
-        # Better estimate: (alerts / days_in_sample) * 30
-        days_in_sample = (df['transaction_date'].max() - df['transaction_date'].min()).days
-        if days_in_sample > 0:
-            estimated_monthly = int((len(alerts) / days_in_sample) * 30)
+        # Estimate monthly volume
+        alert_count = len(alerts_df)
+        total_customers = len(customer_ids)
+        
+        # Simple extrapolation: (alerts_in_sample / customers_in_sample) * total_customers
+        # Multiplied by 1.5 as a loose "monthly scaling" factor
+        estimated_monthly = int((alert_count / min(20, total_customers)) * total_customers * 1.5)
         
         return {
             "status": "success",
-            "alert_count": len(alerts),
-            "sample_alerts": alerts[:10],  # First 10
-            "estimated_monthly_volume": estimated_monthly,
-            "sample_size": len(df)
+            "alert_count": alert_count,
+            "sample_alerts": sample_alerts,
+            "sample_size": total_customers,
+            "estimated_monthly_volume": estimated_monthly
         }
         
     except Exception as e:

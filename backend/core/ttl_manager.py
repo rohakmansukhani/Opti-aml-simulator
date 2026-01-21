@@ -95,43 +95,58 @@ class TTLManager:
         Returns:
             bool indicating success
         """
-        # Get current expiry
-        result = db.execute(
-            text("SELECT expires_at FROM data_uploads WHERE upload_id = :id"),
-            {"id": upload_id}
-        ).fetchone()
+        # Atomic Update to prevent race conditions
+        # We update data_uploads first and get the new expiry, then sync other tables
         
-        if not result:
-            logger.warning("extend_ttl_failed_not_found", upload_id=upload_id)
-            return False
-        
-        current_expiry = result[0]
-        new_expiry = current_expiry + timedelta(hours=additional_hours)
-        
-        # Cap at MAX_TTL_HOURS from now
-        now = datetime.now(timezone.utc)
-        max_allowed = now + timedelta(hours=TTLManager.MAX_TTL_HOURS)
-        
-        # Make new_expiry aware if it's naive
-        if new_expiry.tzinfo is None:
-            new_expiry = new_expiry.replace(tzinfo=timezone.utc)
+        try:
+            # Postgres: Update expires_at by adding interval
+            update_query = text("""
+                UPDATE data_uploads 
+                SET expires_at = expires_at + (:hours * interval '1 hour')
+                WHERE upload_id = :id
+                RETURNING expires_at
+            """)
             
-        if new_expiry > max_allowed:
-            new_expiry = max_allowed
-        
-        # Update expiry
-        db.execute(
-            text("""
-                UPDATE data_uploads SET expires_at = :new_expiry WHERE upload_id = :id;
-                UPDATE transactions SET expires_at = :new_expiry WHERE upload_id = :id;
-                UPDATE customers SET expires_at = :new_expiry WHERE upload_id = :id;
-            """),
-            {"new_expiry": new_expiry, "id": upload_id}
-        )
-        db.commit()
-        
-        logger.info("ttl_extended", upload_id=upload_id, new_expiry=new_expiry.isoformat())
-        return True
+            result = db.execute(update_query, {"hours": additional_hours, "id": upload_id}).fetchone()
+            
+            if not result:
+                logger.warning("extend_ttl_failed_not_found", upload_id=upload_id)
+                return False
+                
+            new_expiry = result[0]
+            
+            # Cap at Max TTL (if new_expiry exceeds limit, force update it back)
+            now = datetime.now(timezone.utc)
+            max_allowed = now + timedelta(hours=TTLManager.MAX_TTL_HOURS)
+            
+            if new_expiry.tzinfo is None:
+                new_expiry = new_expiry.replace(tzinfo=timezone.utc)
+                
+            if new_expiry > max_allowed:
+                new_expiry = max_allowed
+                # Force update to cap
+                db.execute(
+                    text("UPDATE data_uploads SET expires_at = :cap WHERE upload_id = :id"),
+                    {"cap": new_expiry, "id": upload_id}
+                )
+            
+            # Sync child tables
+            db.execute(
+                text("""
+                    UPDATE transactions SET expires_at = :new_expiry WHERE upload_id = :id;
+                    UPDATE customers SET expires_at = :new_expiry WHERE upload_id = :id;
+                """),
+                {"new_expiry": new_expiry, "id": upload_id}
+            )
+            
+            db.commit()
+            logger.info("ttl_extended", upload_id=upload_id, new_expiry=new_expiry.isoformat())
+            return True
+            
+        except Exception as e:
+            db.rollback()
+            logger.error("ttl_extension_error", error=str(e))
+            raise e
     
     @staticmethod
     def cleanup_expired(db: Session, dry_run: bool = False) -> dict:

@@ -35,7 +35,7 @@ logger = structlog.get_logger("sas_simulator")
 # Create database tables
 Base.metadata.create_all(bind=engine)
 
-from api import data, simulation, comparison, rules, risk, scenario_config, dashboard, admin, validation
+from api import data, simulation, comparison, rules, risk, dashboard, admin, validation, fields, investigation
 
 # Rate limiter
 limiter = Limiter(key_func=get_remote_address, default_limits=["200/minute"])
@@ -94,10 +94,11 @@ app.include_router(simulation.router)
 app.include_router(comparison.router)
 app.include_router(rules.router)
 app.include_router(risk.router)
-app.include_router(scenario_config.router)
 app.include_router(dashboard.router)
 app.include_router(validation.router)
 app.include_router(admin.router)  # Admin endpoints for TTL management
+app.include_router(fields.router) # Field Discovery & Autocomplete
+app.include_router(investigation.router) # Investigation & Traceability
 
 
 

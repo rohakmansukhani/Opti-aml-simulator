@@ -7,7 +7,7 @@ import io
 
 from database import get_db
 from services.data_ingestion import DataIngestionService
-from models import Transaction, DataUpload, Alert, SimulationRun, Customer
+from models import Transaction, DataUpload, Alert, SimulationRun, Customer, FieldValueIndex, FieldMetadata, Account, AlertTransaction
 from core.upload_validator import UploadValidator
 from core.ttl_manager import TTLManager
 from auth import get_current_user
@@ -29,7 +29,8 @@ async def upload_transactions(
     service = DataIngestionService()
     
     try:
-        valid_records, errors = service.process_transactions_csv(content, file.filename)
+        # Changed to unpack 3 values
+        valid_records, errors, computed_index = service.process_transactions_csv(content, file.filename)
     except Exception as e:
          raise HTTPException(400, str(e))
     
@@ -51,59 +52,59 @@ async def upload_transactions(
                 "recommendation": "connect_external_db"
             })
         
-        # CHECK FOR EXISTING DATA
-        existing_upload = db.execute(
-            text("""
-                SELECT upload_id, expires_at, record_count_transactions, filename, upload_timestamp
-                FROM data_uploads 
-                WHERE status = 'active' 
-                AND user_id = :user_id
-                AND expires_at > :now
-                ORDER BY upload_timestamp DESC
-                LIMIT 1
-            """),
-            {"now": datetime.now(timezone.utc), "user_id": user_id}
-        ).fetchone()
+    # ===== UPLOAD ID DECISION LOGIC =====
+    upload_id = None
+    expires_at = None
+    should_merge = False
+    
+    # CHECK FOR EXISTING DATA
+    existing_upload_record = db.query(DataUpload).filter(
+        DataUpload.user_id == user_id,
+        DataUpload.status == 'active',
+        DataUpload.expires_at > datetime.now(timezone.utc)
+    ).order_by(DataUpload.upload_timestamp.desc()).first()
+    
+    if existing_upload_record and not force_replace:
+        upload_age = (datetime.now(timezone.utc) - existing_upload_record.upload_timestamp).total_seconds()
         
-        if existing_upload and not force_replace:
-            upload_id, expires_at, existing_count, existing_filename, ts = existing_upload
-            
-            # 1. If same file and similar count, extend TTL instead of replacing
-            if existing_filename == file.filename and abs(existing_count - len(valid_records)) < 10:
-                TTLManager.extend_ttl(db, upload_id, additional_hours=24)
-                return {
-                    "status": "extended",
-                    "message": "Existing data found. TTL extended by 24 hours.",
-                    "upload_id": str(upload_id),
-                    "expires_at": (expires_at + pd.Timedelta(hours=24)).isoformat(),
-                    "records_count": existing_count,
-                    "action": "ttl_extended"
-                }
-            
-            # 2. Sequential Upload Logic: If recent (5m) upload exists with 0 transactions, 
-            # it's likely part of the same batch (customers just uploaded)
-            upload_age = (datetime.now(timezone.utc) - ts).total_seconds()
-            if existing_count == 0 and upload_age < 300:
-                # Merge into existing record
-                upload_id = existing_upload.upload_id
-                db.execute(
-                    text("UPDATE data_uploads SET record_count_transactions = :count, filename = :fname WHERE upload_id = :uid"),
-                    {"count": len(valid_records), "fname": f"{existing_filename}+{file.filename}", "uid": upload_id}
-                )
-            else:
-                # Different data - warn user
-                raise HTTPException(409, detail={
-                    "error": "existing_data_conflict",
-                    "message": f"Active data exists ({existing_filename}). Use force_replace=true to replace.",
-                    "existing_upload_id": str(upload_id),
-                    "expires_at": expires_at.isoformat(),
-                    "existing_filename": existing_filename,
-                    "existing_count": existing_count,
-                    "new_count": len(valid_records),
-                    "suggestion": "Add ?force_replace=true to URL to replace existing data"
-                })
+        # Same file check
+        if existing_upload_record.filename == file.filename and \
+           abs(existing_upload_record.record_count_transactions - len(valid_records)) < 10:
+            TTLManager.extend_ttl(db, existing_upload_record.upload_id, additional_hours=24)
+            return {
+                "status": "extended",
+                "message": "Existing data found. TTL extended by 24 hours.",
+                "upload_id": str(existing_upload_record.upload_id),
+                "expires_at": (existing_upload_record.expires_at + pd.Timedelta(hours=24)).isoformat(),
+                "records_count": existing_upload_record.record_count_transactions,
+                "action": "ttl_extended"
+            }
         
-        # CREATE NEW UPLOAD (if no conflict or force_replace=true)
+        # Merge check: customers exist, transactions don't, recent upload
+        if existing_upload_record.record_count_customers > 0 and \
+           existing_upload_record.record_count_transactions == 0 and \
+           upload_age < 300:
+            # MERGE MODE
+            upload_id = existing_upload_record.upload_id
+            expires_at = existing_upload_record.expires_at
+            should_merge = True
+            
+            # Update record
+            existing_upload_record.record_count_transactions = len(valid_records)
+            existing_upload_record.filename = f"{existing_upload_record.filename}+{file.filename}"
+            db.commit()
+        else:
+            # Conflict
+            raise HTTPException(409, detail={
+                "error": "existing_data_conflict",
+                "message": f"Active data exists ({existing_upload_record.filename}). Use force_replace=true to replace.",
+                "existing_upload_id": str(existing_upload_record.upload_id),
+                "expires_at": existing_upload_record.expires_at.isoformat(),
+                "suggestion": "Add ?force_replace=true to URL"
+            })
+    
+    # CREATE NEW UPLOAD (only if not merging)
+    if not should_merge:
         upload_id = TTLManager.create_upload_record(
             db=db,
             user_id=user_id,
@@ -113,41 +114,71 @@ async def upload_transactions(
             schema_snapshot={"columns": list(df.columns)},
             ttl_hours=48
         )
-        
         expires_at = TTLManager.set_expiry(48)
-        
-        # Add TTL fields to records
-        for record in valid_records:
-            record['upload_id'] = upload_id
-            record['expires_at'] = expires_at
-        
-        try:
-            # Clear existing data ONLY for the current user
-            from models import Alert, SimulationRun, DataUpload, Transaction
-            
-            # Find all previous upload IDs for this user
-            prev_upload_ids = [u.upload_id for u in db.query(DataUpload.upload_id).filter(DataUpload.user_id == user_id).all()]
-            # Find all previous run IDs for this user
+    
+    # ===== DATA INSERTION =====
+    for record in valid_records:
+        record['upload_id'] = upload_id
+        record['expires_at'] = expires_at
+    
+    try:
+        # Clear old data (only if NOT merging)
+        if not should_merge:
+            prev_upload_ids = [u.upload_id for u in db.query(DataUpload.upload_id).filter(
+                DataUpload.user_id == user_id,
+                DataUpload.upload_id != upload_id
+            ).all()]
             prev_run_ids = [r.run_id for r in db.query(SimulationRun.run_id).filter(SimulationRun.user_id == user_id).all()]
             
-            if prev_run_ids:
+
+            prev_alert_ids = [a.alert_id for a in db.query(Alert.alert_id).filter(Alert.run_id.in_(prev_run_ids)).all()]
+            
+            if prev_alert_ids:
+                db.query(AlertTransaction).filter(AlertTransaction.alert_id.in_(prev_alert_ids)).delete(synchronize_session=False)
                 db.query(Alert).filter(Alert.run_id.in_(prev_run_ids)).delete(synchronize_session=False)
             
             if prev_upload_ids:
                 db.query(Transaction).filter(Transaction.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                db.query(FieldValueIndex).filter(FieldValueIndex.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                db.query(FieldMetadata).filter(FieldMetadata.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
             
             # EXTRA SAFETY: Delete specific records in the current batch that would cause unique conflicts
             incoming_txn_ids = [r['transaction_id'] for r in valid_records if 'transaction_id' in r]
             if incoming_txn_ids:
                 db.query(Transaction).filter(Transaction.transaction_id.in_(incoming_txn_ids)).delete(synchronize_session=False)
                 
-            db.flush()
+        db.flush()
+        
+        db.bulk_insert_mappings(Transaction, valid_records)
+        
+        # Save Field Metadata & Index
+        print(f"Saving {len(computed_index)} field indices...")
+        for field_name, data in computed_index.items():
+            metadata = data['metadata']
+            values = data['values']
             
-            db.bulk_insert_mappings(Transaction, valid_records)
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            raise HTTPException(400, f"Database error: {str(e)}")
+            # 1. Save Metadata
+            db_metadata = FieldMetadata(
+                upload_id=upload_id,
+                table_name='transactions',
+                **metadata
+            )
+            db.add(db_metadata)
+            
+            # 2. Save Values
+            for val in values:
+                db_val = FieldValueIndex(
+                    upload_id=upload_id,
+                    table_name='transactions',
+                    field_name=field_name,
+                    **val
+                )
+                db.add(db_val)
+        
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(400, f"Database error: {str(e)}")
     
     return {
         "status": "success",
@@ -156,7 +187,7 @@ async def upload_transactions(
         "error_sample": errors[:5] if errors else [],
         "upload_id": str(upload_id) if valid_records else None,
         "expires_at": expires_at.isoformat() if valid_records else None,
-        "action": "new_upload"
+        "action": "merged" if should_merge else "new_upload"
     }
 
 @router.get("/schema")
@@ -269,7 +300,8 @@ async def upload_customers(
     content = await file.read()
     service = DataIngestionService()
     try:
-        valid_records, errors = service.process_customers_csv(content, file.filename)
+        # Changed to unpack 4 values (added extracted_accounts)
+        valid_records, errors, computed_index, extracted_accounts = service.process_customers_csv(content, file.filename)
     except Exception as e:
         raise HTTPException(400, str(e))
     
@@ -290,61 +322,59 @@ async def upload_customers(
                 "recommendation": "connect_external_db"
             })
         
-        # CHECK FOR EXISTING DATA
-        existing_upload = db.execute(
-            text("""
-                SELECT upload_id, expires_at, record_count_customers, filename, upload_timestamp
-                FROM data_uploads 
-                WHERE status = 'active' 
-                AND user_id = :user_id
-                AND expires_at > :now
-                ORDER BY upload_timestamp DESC
-                LIMIT 1
-            """),
-            {"now": datetime.now(timezone.utc), "user_id": user_id}
-        ).fetchone()
+    # ===== UPLOAD ID DECISION LOGIC =====
+    upload_id = None
+    expires_at = None
+    should_merge = False
+    
+    # CHECK FOR EXISTING DATA
+    existing_upload_record = db.query(DataUpload).filter(
+        DataUpload.user_id == user_id,
+        DataUpload.status == 'active',
+        DataUpload.expires_at > datetime.now(timezone.utc)
+    ).order_by(DataUpload.upload_timestamp.desc()).first()
+    
+    if existing_upload_record and not force_replace:
+        upload_age = (datetime.now(timezone.utc) - existing_upload_record.upload_timestamp).total_seconds()
         
-        if existing_upload and not force_replace:
-            upload_id, expires_at, existing_count, existing_filename, ts = existing_upload
-            
-            # 1. If same file and similar count, extend TTL instead of replacing
-            if existing_filename == file.filename and abs(existing_count - len(valid_records)) < 5:
-                # Extend TTL by 24 hours
-                TTLManager.extend_ttl(db, upload_id, additional_hours=24)
-                
-                return {
-                    "status": "extended",
-                    "message": "Existing data found. TTL extended by 24 hours.",
-                    "upload_id": str(upload_id),
-                    "expires_at": (expires_at + pd.Timedelta(hours=24)).isoformat(),
-                    "records_count": existing_count,
-                    "action": "ttl_extended"
-                }
-            
-            # 2. Sequential Upload Logic: If recent (5m) upload exists with 0 customers,
-            # it's likely part of the same batch (transactions just uploaded)
-            upload_age = (datetime.now(timezone.utc) - ts).total_seconds()
-            if existing_count == 0 and upload_age < 300:
-                # Merge into existing record
-                upload_id = existing_upload.upload_id
-                db.execute(
-                    text("UPDATE data_uploads SET record_count_customers = :count, filename = :fname WHERE upload_id = :uid"),
-                    {"count": len(valid_records), "fname": f"{existing_filename}+{file.filename}", "uid": upload_id}
-                )
-            else:
-                # Different data - warn user
-                raise HTTPException(409, detail={
-                    "error": "existing_data_conflict",
-                    "message": f"Active data exists ({existing_filename}). Use force_replace=true to replace.",
-                    "existing_upload_id": str(upload_id),
-                    "expires_at": expires_at.isoformat(),
-                    "existing_filename": existing_filename,
-                    "existing_count": existing_count,
-                    "new_count": len(valid_records),
-                    "suggestion": "Add ?force_replace=true to URL to replace existing data"
-                })
+        # Same file check
+        if existing_upload_record.filename == file.filename and \
+           abs(existing_upload_record.record_count_customers - len(valid_records)) < 5:
+            # Extend TTL
+            TTLManager.extend_ttl(db, existing_upload_record.upload_id, additional_hours=24)
+            return {
+                "status": "extended",
+                "message": "Existing data found. TTL extended by 24 hours.",
+                "upload_id": str(existing_upload_record.upload_id),
+                "expires_at": (existing_upload_record.expires_at + pd.Timedelta(hours=24)).isoformat(),
+                "records_count": existing_upload_record.record_count_customers,
+                "action": "ttl_extended"
+            }
         
-        # CREATE NEW UPLOAD (if no conflict or force_replace=true)
+        # Merge check: transactions exist, customers don't, recent upload
+        if existing_upload_record.record_count_transactions > 0 and \
+           existing_upload_record.record_count_customers == 0 and \
+           upload_age < 300:
+            # MERGE MODE
+            upload_id = existing_upload_record.upload_id
+            expires_at = existing_upload_record.expires_at
+            should_merge = True
+            
+            # Update record
+            existing_upload_record.record_count_customers = len(valid_records)
+            existing_upload_record.filename = f"{existing_upload_record.filename}+{file.filename}"
+            db.commit()
+        else:
+             raise HTTPException(409, detail={
+                "error": "existing_data_conflict",
+                "message": f"Active data exists ({existing_upload_record.filename}). Use force_replace=true to replace.",
+                "existing_upload_id": str(existing_upload_record.upload_id),
+                "expires_at": existing_upload_record.expires_at.isoformat(),
+                "suggestion": "Add ?force_replace=true to URL to replace existing data"
+            })
+    
+    # CREATE NEW UPLOAD (only if not merging)
+    if not should_merge:
         upload_id = TTLManager.create_upload_record(
             db=db,
             user_id=user_id,
@@ -354,20 +384,29 @@ async def upload_customers(
             schema_snapshot={"columns": list(df.columns)},
             ttl_hours=48
         )
-        
         expires_at = TTLManager.set_expiry(48)
+    
+    # ===== DATA INSERTION =====
+    # Add TTL fields to records
+    for record in valid_records:
+        record['upload_id'] = upload_id
+        record['expires_at'] = expires_at
         
-        # Add TTL fields to records
-        for record in valid_records:
-            record['upload_id'] = upload_id
-            record['expires_at'] = expires_at
-        
-        try:
-            # Clear existing data ONLY for the current user
-            from models import Alert, SimulationRun, DataUpload, Customer, Transaction
+    for account in extracted_accounts:
+        account['upload_id'] = upload_id
+        account['expires_at'] = expires_at
+    
+    try:
+        # Clear existing data ONLY for the current user
+        # (Only if NOT merging - merging appends to the same upload_id entity but we are inserting new rows for a different table)
+        if not should_merge:
+
             
             # Find all previous upload IDs for this user
-            prev_upload_ids = [u.upload_id for u in db.query(DataUpload.upload_id).filter(DataUpload.user_id == user_id).all()]
+            prev_upload_ids = [u.upload_id for u in db.query(DataUpload.upload_id).filter(
+                DataUpload.user_id == user_id,
+                DataUpload.upload_id != upload_id
+            ).all()]
             # Find all previous run IDs for this user
             prev_run_ids = [r.run_id for r in db.query(SimulationRun.run_id).filter(SimulationRun.user_id == user_id).all()]
             
@@ -375,29 +414,62 @@ async def upload_customers(
             if prev_run_ids:
                 db.query(Alert).filter(Alert.run_id.in_(prev_run_ids)).delete(synchronize_session=False)
             
-            # 2. Delete Transactions/Customers linked to this user's uploads
+            # 2. Delete Transactions/Customers/Accounts linked to this user's uploads
             if prev_upload_ids:
                 db.query(Transaction).filter(Transaction.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                # Cleanup Accounts
+                db.query(Account).filter(Account.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                # Cleanup Customers
                 db.query(Customer).filter(Customer.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                # Cleanup Indices
+                db.query(FieldValueIndex).filter(FieldValueIndex.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                db.query(FieldMetadata).filter(FieldMetadata.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+        
+        # 3. EXTRA SAFETY: Delete specific records in the current batch
+        incoming_cust_ids = [r['customer_id'] for r in valid_records if 'customer_id' in r]
+        if incoming_cust_ids:
+            # Referenced tables first
+            db.query(Alert).filter(Alert.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
+            db.query(Transaction).filter(Transaction.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
+            db.query(Account).filter(Account.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
+            db.query(Customer).filter(Customer.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
+        
+        db.flush()
+        
+        # Bulk Insert Customers & Accounts
+        db.bulk_insert_mappings(Customer, valid_records)
+        
+        if extracted_accounts:
+            db.bulk_insert_mappings(Account, extracted_accounts)
+
+        # Save Field Metadata & Index
+        print(f"Saving {len(computed_index)} field indices for customers...")
+        for field_name, data in computed_index.items():
+            metadata = data['metadata']
+            values = data['values']
             
-            # 3. EXTRA SAFETY: Delete specific records in the current batch that would cause unique conflicts
-            # This handles orphans from old systems or failed partial uploads
-            incoming_cust_ids = [r['customer_id'] for r in valid_records if 'customer_id' in r]
-            if incoming_cust_ids:
-                # FIRST: Delete referencing Alerts (FK constraint)
-                db.query(Alert).filter(Alert.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
-                # SECOND: Delete referencing Transactions (FK constraint)
-                db.query(Transaction).filter(Transaction.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
-                # THIRD: Now safe to delete the customers
-                db.query(Customer).filter(Customer.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
+            # 1. Save Metadata
+            db_metadata = FieldMetadata(
+                upload_id=upload_id,
+                table_name='customers',
+                **metadata
+            )
+            db.add(db_metadata)
             
-            db.flush()
-            
-            db.bulk_insert_mappings(Customer, valid_records)
-            db.commit()
-        except Exception as e:
-            db.rollback()
-            raise HTTPException(400, f"Database error: {str(e)}")
+            # 2. Save Values
+            for val in values:
+                db_val = FieldValueIndex(
+                    upload_id=upload_id,
+                    table_name='customers',
+                    field_name=field_name,
+                    **val
+                )
+                db.add(db_val)
+        
+        db.commit()
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(400, f"Database error: {str(e)}")
             
     return {
         "status": "success",
@@ -405,7 +477,7 @@ async def upload_customers(
         "errors": len(errors),
         "upload_id": str(upload_id) if valid_records else None,
         "expires_at": expires_at.isoformat() if valid_records else None,
-        "action": "new_upload"
+        "action": "merged" if should_merge else "new_upload"
     }
 
 @router.get("/values")
@@ -426,7 +498,11 @@ async def get_field_values(
     for table in potential_tables:
         try:
             # Query JSONB raw_data directly (schema-agnostic)
-            json_sql = f"""
+            # SQL Injection Fix: Validate table & use params
+            if table not in ['transactions', 'customers']:
+                continue
+
+            query = text(f"""
                 SELECT DISTINCT t.raw_data ->> :field_name
                 FROM {table} t
                 JOIN data_uploads du ON t.upload_id = du.upload_id
@@ -434,8 +510,8 @@ async def get_field_values(
                 AND t.raw_data ? :field_name
                 AND lower(t.raw_data ->> :field_name) LIKE lower(:search)
                 LIMIT 20
-            """
-            json_result = db.execute(text(json_sql), {"field_name": field, "search": f"%{search}%", "user_id": user_id})
+            """)
+            json_result = db.execute(query, {"field_name": field, "search": f"%{search}%", "user_id": user_id})
             json_values = [row[0] for row in json_result.fetchall() if row[0] is not None]
 
             print(f"[VALUES] Found {len(json_values)} values in {table}: {json_values}")

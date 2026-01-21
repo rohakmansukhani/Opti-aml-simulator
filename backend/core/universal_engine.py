@@ -129,137 +129,244 @@ class AggregationProcessor:
     Handles data aggregation.
     """
     def aggregate_data(self, transactions: pd.DataFrame, agg_config) -> pd.DataFrame:
-        if not agg_config or transactions.empty:
+        # Handle empty input
+        if transactions.empty:
             return pd.DataFrame()
+        
+        # ✅ FIX: Proper None check for aggregation config
+        if agg_config is None:
+            print("[WARN] No aggregation config provided")
+            return transactions.copy()
+        
+        # ✅ FIX: Check if required fields exist
+        if not hasattr(agg_config, 'method') or not hasattr(agg_config, 'field'):
+            print("[ERROR] Aggregation config missing required fields (method/field)")
+            return transactions.copy()
+        
+        if not hasattr(agg_config, 'group_by') or not agg_config.group_by:
+            print("[ERROR] Aggregation config missing group_by")
+            return transactions.copy()
             
         df = transactions.copy()
-        group_fields = agg_config.group_by.copy()
-        
-        # Time Window
-        if agg_config.time_window:
-            tw = agg_config.time_window
-            if tw.unit == 'days' and tw.type == 'calendar':
-                if 'transaction_date' in df.columns:
-                    df['time_group'] = df['transaction_date'].dt.floor(f'{tw.value}D')
-                    group_fields.append('time_group')
-            elif tw.unit == 'months' and tw.type == 'calendar':
-                 if 'transaction_date' in df.columns:
-                    df['time_group'] = df['transaction_date'].dt.to_period('M')
-                    group_fields.append('time_group')
-
         method = agg_config.method
         field = agg_config.field
+        group_fields = agg_config.group_by.copy()
         
-        # Rolling Windows
-        if agg_config.time_window and agg_config.time_window.type == 'rolling':
-            return self._apply_rolling_window(df, agg_config, group_fields)
 
-        # Standard GroupBy
+        
+        # Validate field exists
+        if field not in df.columns:
+            print(f"[ERROR] Aggregation field '{field}' not in columns: {list(df.columns)}")
+            return pd.DataFrame()
+        
+        # Time Window Handling
+        if agg_config.time_window:
+            tw = agg_config.time_window
+            
+            # 1. Global Datetime Conversion Safety Check
+            if 'transaction_date' in df.columns:
+                if not pd.api.types.is_datetime64_any_dtype(df['transaction_date']):
+                    df['transaction_date'] = pd.to_datetime(df['transaction_date'], errors='coerce', utc=True)
+                    if df['transaction_date'].dt.tz is not None:
+                        df['transaction_date'] = df['transaction_date'].dt.tz_localize(None)
+
+            # 2. Calendar-based Aggregation
+            if hasattr(tw, 'type') and tw.type == 'calendar':
+                if tw.unit == 'days':
+                    df['time_group'] = df['transaction_date'].dt.floor(f'{tw.value}D')
+                    group_fields.append('time_group')
+                elif tw.unit == 'months':
+                    df['time_group'] = df['transaction_date'].dt.to_period('M')
+                    group_fields.append('time_group')
+            
+            # 3. Rolling Windows
+            if hasattr(tw, 'type') and tw.type == 'rolling':
+                return self._apply_rolling_window(df, agg_config, group_fields)
+
+        # Standard GroupBy Aggregation
         try:
             # Ensure all group fields exist
             missing_group = [f for f in group_fields if f not in df.columns]
             if missing_group:
-                print(f"[WARN] Missing group fields: {missing_group}")
+                print(f"[ERROR] Missing group fields: {missing_group}")
                 return pd.DataFrame()
 
-            if method == 'sum':
-                result = df.groupby(group_fields)[field].sum().reset_index()
-            elif method == 'count':
-                result = df.groupby(group_fields)[field].count().reset_index()
-            elif method == 'avg':
-                 result = df.groupby(group_fields)[field].mean().reset_index()
-            elif method == 'max':
-                 result = df.groupby(group_fields)[field].max().reset_index()
-            elif method == 'min':
-                 result = df.groupby(group_fields)[field].min().reset_index()
+            # Define aggregation dictionary
+            agg_dict = {field: method}
+            
+            # Traceability: Collect transaction IDs
+            if 'transaction_id' in df.columns:
+                agg_dict['transaction_id'] = lambda x: list(x)
+            
+
+            
+            # Perform GroupBy
+            result = df.groupby(group_fields, as_index=False).agg(agg_dict)
+            
+
+            
+            # ✅ ADD TRANSACTION COUNT AFTER AGGREGATION
+            if 'transaction_id' in result.columns:
+                result['txn_count'] = result['transaction_id'].apply(len)
             else:
-                 return pd.DataFrame()
+                result['txn_count'] = 0
+            
+            # Rename columns
+            rename_dict = {
+                field: 'aggregated_value'
+            }
+            
+            if 'transaction_id' in agg_dict:
+                rename_dict['transaction_id'] = 'involved_transactions'
+            
+            result.rename(columns=rename_dict, inplace=True)
+            
+            # Add alert_date as max transaction date per group
+            if 'transaction_date' in df.columns:
+                max_dates = df.groupby(group_fields)['transaction_date'].max().reset_index()
+                result = result.merge(max_dates, on=group_fields, how='left')
+                result.rename(columns={'transaction_date': 'alert_date'}, inplace=True)
+            else:
+                # Use current time if no transaction date available
+                from datetime import datetime
+                result['alert_date'] = datetime.utcnow()
+            
+
+            
         except Exception as e:
             print(f"[ERROR] Aggregation Failed: {e}")
+            import traceback
+            traceback.print_exc()
             return pd.DataFrame()
 
-        result.rename(columns={field: 'aggregated_value'}, inplace=True)
         return result
 
     def _apply_rolling_window(self, df: pd.DataFrame, agg_config, group_fields) -> pd.DataFrame:
+        """Apply rolling time window aggregation"""
         tw = agg_config.time_window
         field = agg_config.field
+        method = agg_config.method
         
         if 'transaction_date' not in df.columns:
+            print("[ERROR] transaction_date required for rolling window")
             return pd.DataFrame()
-            
-        window_size = tw.value
         
-        if tw.unit == 'months':
-            entity_key = 'customer_id' if 'customer_id' in group_fields else group_fields[0]
-            df = df.copy()
-            df['period'] = df['transaction_date'].dt.to_period('M')
-            monthly_agg = df.groupby([entity_key, 'period'])[field].sum().reset_index()
-            monthly_agg = monthly_agg.sort_values([entity_key, 'period'])
-            monthly_agg['aggregated_value'] = monthly_agg.groupby(entity_key)[field].transform(
-                lambda x: x.rolling(window=window_size, min_periods=1).sum()
-            )
-            monthly_agg['transaction_date'] = monthly_agg['period'].dt.to_timestamp(how='end')
-            return monthly_agg[[entity_key, 'transaction_date', 'aggregated_value']]
+        # Sort by date
+        df = df.sort_values(['customer_id', 'transaction_date'])
+        
+        window_value = tw.value
+        window_unit = tw.unit
+        
+        # Convert to days
+        if window_unit == 'days':
+            window_days = window_value
+        elif window_unit == 'months':
+            window_days = window_value * 30
+        elif window_unit == 'hours':
+            window_days = window_value / 24
+        else:
+            window_days = window_value
+        
+        print(f"[ROLLING] Window: {window_days} days")
+        
+        # Calculate rolling aggregation per customer
+        results = []
+        entity_key = 'customer_id' if 'customer_id' in group_fields else group_fields[0]
+        
+        for customer_id in df[entity_key].unique():
+            cust_df = df[df[entity_key] == customer_id].copy()
             
-        elif tw.unit == 'days':
-            df = df.sort_values(group_fields + ['transaction_date'])
-            entity_key = 'customer_id' if 'customer_id' in group_fields else group_fields[0]
-            df.set_index('transaction_date', inplace=True)
-            rolled = df.groupby(entity_key)[field].rolling(f"{window_size}D")
-            
-            if agg_config.method == 'sum': result = rolled.sum()
-            elif agg_config.method == 'count': result = rolled.count()
-            else: result = rolled.sum()
-            
-            result = result.reset_index()
-            result.rename(columns={field: 'aggregated_value'}, inplace=True)
-            return result
-        return pd.DataFrame()
+            for idx, row in cust_df.iterrows():
+                txn_date = row['transaction_date']
+                start_date = txn_date - pd.Timedelta(days=window_days)
+                
+                # Get transactions in window
+                window_df = cust_df[
+                    (cust_df['transaction_date'] >= start_date) &
+                    (cust_df['transaction_date'] <= txn_date)
+                ]
+                
+                # Calculate aggregation
+                if method == 'sum':
+                    agg_value = window_df[field].sum()
+                elif method == 'count':
+                    agg_value = len(window_df)
+                elif method == 'mean':
+                    agg_value = window_df[field].mean()
+                else:
+                    agg_value = window_df[field].sum()
+                
+                results.append({
+                    entity_key: customer_id,
+                    'alert_date': txn_date,
+                    'aggregated_value': agg_value,
+                    'transaction_count': len(window_df),
+                    'involved_transactions': window_df['transaction_id'].tolist() if 'transaction_id' in window_df.columns else []
+                })
+        
+        result_df = pd.DataFrame(results)
+        print(f"[ROLLING] Generated {len(result_df)} windows")
+        
+        return result_df
 
 class ThresholdProcessor:
     def apply_thresholds(self, aggregated_data: pd.DataFrame, customers: pd.DataFrame, threshold_config) -> pd.DataFrame:
-        if not threshold_config or aggregated_data.empty:
+        if threshold_config is None or aggregated_data.empty:
+            print("[THRESHOLD] No threshold config or empty data")
             return aggregated_data
-            
-        # Merging logic handled by Smart Merge in Engine now, but we keep this as fallback?
-        # Actually, if Engine merged fields, aggregated_data might have lost them due to groupby!
-        # Thresholds might need customer attributes (e.g. Segment).
-        # We need to re-merge customer data if grouping removed it.
         
+        # Re-merge customer fields if needed for threshold calculation
         if 'customer_id' in aggregated_data.columns:
-             # Check if we need fields
-             t_type = threshold_config.type
-             needed_field = None
-             if t_type == 'segment_based' and threshold_config.segment_based:
-                 needed_field = threshold_config.segment_based.segment_field
-             elif t_type == 'field_based' and threshold_config.field_based:
-                 needed_field = threshold_config.field_based.reference_field
+             t_type = getattr(threshold_config, 'type', None)
              
-             if needed_field and needed_field not in aggregated_data.columns and needed_field in customers.columns:
-                 aggregated_data = aggregated_data.merge(customers[['customer_id', needed_field]], on='customer_id', how='left')
+             if t_type == 'segment_based' and hasattr(threshold_config, 'segment_based'):
+                 seg = threshold_config.segment_based
+                 needed_field = getattr(seg, 'segment_field', None)
+                 if needed_field and needed_field not in aggregated_data.columns and needed_field in customers.columns:
+                     aggregated_data = aggregated_data.merge(
+                         customers[['customer_id', needed_field]], 
+                         on='customer_id', 
+                         how='left'
+                     )
 
-        t_type = threshold_config.type
+        t_type = getattr(threshold_config, 'type', 'fixed')
         
+        # Calculate threshold values
         if t_type == 'fixed':
-            aggregated_data['threshold'] = threshold_config.fixed_value
+            threshold_value = getattr(threshold_config, 'fixed_value', 0)
+            aggregated_data['threshold'] = threshold_value
+
+            
         elif t_type == 'segment_based':
             seg = threshold_config.segment_based
-            if seg and seg.segment_field in aggregated_data.columns:
-                aggregated_data['threshold'] = aggregated_data[seg.segment_field].map(seg.values).fillna(seg.default)
+            if seg and hasattr(seg, 'segment_field') and seg.segment_field in aggregated_data.columns:
+                aggregated_data['threshold'] = aggregated_data[seg.segment_field].map(
+                    seg.values
+                ).fillna(seg.default)
             else:
-                aggregated_data['threshold'] = seg.default
-        elif t_type == 'field_based' and threshold_config.field_based:
+                aggregated_data['threshold'] = getattr(seg, 'default', 0)
+                
+        elif t_type == 'field_based' and hasattr(threshold_config, 'field_based'):
             fb = threshold_config.field_based
-            ref = fb.reference_field
-            calc = fb.calculation
+            ref = getattr(fb, 'reference_field', None)
+            calc = getattr(fb, 'calculation', 'reference_field')
+            
             def eval_calc(row):
                 try:
                     val = row.get(ref, 0)
                     return simple_eval(calc, names={'reference_field': val})
-                except: return 0
+                except:
+                    return 0
+            
             aggregated_data['threshold'] = aggregated_data.apply(eval_calc, axis=1)
-                
+        
+        # ✅ FIX: Actually FILTER by threshold!
+        if 'threshold' in aggregated_data.columns and 'aggregated_value' in aggregated_data.columns:
+            before_count = len(aggregated_data)
+            aggregated_data = aggregated_data[aggregated_data['aggregated_value'] >= aggregated_data['threshold']]
+            after_count = len(aggregated_data)
+
+        
         return aggregated_data
 
 class AlertConditionEvaluator:
@@ -421,9 +528,7 @@ class UniversalScenarioEngine:
         customers_subset = customers[customer_cols].copy()
         customers_subset = customers_subset.drop_duplicates(subset=['customer_id'])
         
-        # DEBUG: Check for duplicate columns BEFORE merge
-        print(f"[DEBUG] Transactions columns: {list(transactions.columns)}")
-        print(f"[DEBUG] Customers columns: {list(customers_subset.columns)}")
+
         
         # Check if transactions has duplicate customer_id columns
         txn_customer_id_count = list(transactions.columns).count('customer_id')
@@ -448,7 +553,7 @@ class UniversalScenarioEngine:
             suffixes=('', '_cust')
         )
         
-        print(f"[MERGE] Joined {len(required_fields)} customer fields")
+
         return merged
 
     def execute(self, scenario_config: ScenarioConfigModel, transactions: pd.DataFrame, customers: pd.DataFrame, run_id: str) -> List[Dict]:
@@ -496,47 +601,42 @@ class UniversalScenarioEngine:
             >>> for alert in alerts:
             ...     print(f"Alert for {alert['customer_name']}: {alert['risk_score']}")
         """
-        print(f"\n{'='*60}")
-        print(f"[EXECUTE] Scenario: {scenario_config.scenario_name}")
-        
         # Step 0: Intelligent Customer Field Detection
         required_customer_fields = self._get_required_customer_fields(scenario_config)
-        print(f"[STEP 0] Required customer fields: {required_customer_fields}")
         
         # Step 1: Smart Merge
         enriched_data = self._smart_merge_customers(transactions, customers, required_customer_fields)
-        print(f"[STEP 1] Data enrichment complete: {len(enriched_data)} rows")
         
         # Step 2: Apply Filters
         filtered = self.filter_processor.apply_filters(enriched_data, scenario_config.filters)
         if filtered.empty:
             print("[WARN] All transactions filtered out!")
             return []
-        print(f"[STEP 2] After filters: {len(filtered)} rows")
+
         
         # Step 3: Aggregations
         aggregated = self.aggregation_processor.aggregate_data(filtered, scenario_config.aggregation)
         if aggregated.empty:
             print("[WARN] No data after aggregation")
             return []
-        print(f"[STEP 3] After aggregation: {len(aggregated)} rows")
+
         
         # Step 4: Thresholds
         with_thresh = self.threshold_processor.apply_thresholds(aggregated, customers, scenario_config.threshold)
-        print(f"[STEP 4] Thresholds applied: {len(with_thresh)} rows")
+
         
         # Step 5: Conditions
         alerts_df = self.condition_evaluator.evaluate_condition(with_thresh, scenario_config.alert_condition)
         if alerts_df.empty:
             print("[INFO] No alerts triggered")
             return []
-        print(f"[STEP 5] Alerts triggered: {len(alerts_df)}")
+
         
         # Step 6: Refinements
         if scenario_config.refinements and self.smart_layer:
             refinements_list = [r.dict() for r in scenario_config.refinements]
             alerts_df = self.smart_layer.apply_refinements(alerts_df, enriched_data, refinements_list)
-            print(f"[STEP 6] After refinements: {len(alerts_df)} alerts")
+
             
         # Step 7: Metadata
         alerts_df['scenario_id'] = scenario_config.scenario_id
@@ -573,9 +673,14 @@ class UniversalScenarioEngine:
                 "risk_score": risk_score,
                 "excluded": row.get('excluded', False),
                 "exclusion_reason": row.get('exclusion_reason'),
-                "is_excluded": row.get('excluded', False)
+                "is_excluded": row.get('excluded', False),
+                "involved_transactions": row.get('involved_transactions', []) # Traceability
             }
             details = row.to_dict()
+            # remove large list from trigger details to save space
+            if 'involved_transactions' in details:
+                del details['involved_transactions']
+                
             base['trigger_details'] = {str(k): str(v) for k,v in details.items()}
             alerts.append(base)
         return alerts
