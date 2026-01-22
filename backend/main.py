@@ -54,7 +54,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 # Production CORS configuration
 # We split by comma and strip whitespace to be extra safe
-DEFAULT_ORIGINS = "http://localhost:3000,https://opti-aml-simulator.vercel.app"
+DEFAULT_ORIGINS = "http://localhost:3000,https://opti-aml-simulator.vercel.app,http://172.20.10.2:3000"
 ALLOWED_ORIGINS = [
     o.strip() for o in os.getenv("ALLOWED_ORIGINS", DEFAULT_ORIGINS).split(",")
     if o.strip()

@@ -47,8 +47,14 @@ class DataIngestionService:
         df = df.where(pd.notnull(df), None)
         return df
 
-    def process_transactions_csv(self, file_content: bytes, filename: str = "data.csv") -> tuple[List[dict], List[dict], dict]:
+    def process_transactions_csv(self, file_content: bytes, filename: str = "data.csv", upload_id: str = None) -> tuple[List[dict], List[dict], dict]:
         df = self._read_file(file_content, filename)
+        
+        # ✅ Generate upload_id and prefix EARLY
+        import uuid
+        if upload_id is None:
+            upload_id = str(uuid.uuid4())
+        upload_prefix = upload_id[:8]  # First 8 chars for prefix
         
         # Best-effort header mapping
         mapping = {
@@ -75,10 +81,24 @@ class DataIngestionService:
         
         for idx, row in enumerate(df.to_dict(orient='records')):
             try:
-                # ✅ STEP 1: Build raw_data with ALL original fields
+                # ✅ STEP 1: Build raw_data, excluding ID fields to avoid duplicates
                 raw_data = {}
+                original_customer_id = None
+                original_transaction_id = None
+                
                 for k, v in row.items():
                     clean_k = str(k).lower().strip().replace(' ', '_')
+                    target_k = mapping.get(clean_k, clean_k)
+                    
+                    # ✅ Extract and skip ID fields (they're table columns, not raw_data)
+                    if target_k == 'customer_id':
+                        original_customer_id = str(v)
+                        continue  # Don't add to raw_data
+                    elif target_k == 'transaction_id':
+                        original_transaction_id = str(v)
+                        continue  # Don't add to raw_data
+                    
+                    # Add all other fields to raw_data
                     if v is not None:  # Skip None/NaN
                         # Convert types for JSON serialization
                         if isinstance(v, (np.integer, np.floating)):
@@ -90,24 +110,23 @@ class DataIngestionService:
                         else:
                             raw_data[clean_k] = str(v)
                 
-                # ✅ STEP 2: Extract required system fields for model validation
-                processed_row = {
-                    'raw_data': raw_data  # ✅ ALL FIELDS STORED HERE
-                }
-                
-                # Extract required PKs
-                for k, v in row.items():
-                    clean_k = str(k).lower().strip().replace(' ', '_')
-                    target_k = mapping.get(clean_k, clean_k)
-                    
-                    if target_k == 'transaction_id':
-                        processed_row['transaction_id'] = str(v)
-                    elif target_k == 'customer_id':
-                        processed_row['customer_id'] = str(v)
+                # ✅ Store original IDs separately in raw_data
+                if original_customer_id:
+                    raw_data['original_customer_id'] = original_customer_id
+                if original_transaction_id:
+                    raw_data['original_transaction_id'] = original_transaction_id
                 
                 # Validate required fields exist
-                if 'transaction_id' not in processed_row or 'customer_id' not in processed_row:
+                if not original_transaction_id or not original_customer_id:
                     raise ValueError(f"Missing required fields: transaction_id or customer_id")
+                
+                # ✅ STEP 2: Build processed_row with prefixed customer_id
+                processed_row = {
+                    'transaction_id': original_transaction_id,
+                    'customer_id': f"{upload_prefix}_{original_customer_id}",
+                    'upload_id': upload_id,
+                    'raw_data': raw_data
+                }
                 
                 valid_records.append(processed_row)
                 
@@ -119,8 +138,14 @@ class DataIngestionService:
         
         return valid_records, errors, computed_index
         
-    def process_customers_csv(self, file_content: bytes, filename: str = "data.csv") -> tuple[List[dict], List[dict], dict, List[dict]]:
+    def process_customers_csv(self, file_content: bytes, filename: str = "data.csv", upload_id: str = None) -> tuple[List[dict], List[dict], dict, List[dict]]:
         df = self._read_file(file_content, filename)
+        
+        # ✅ Generate upload_id and prefix EARLY
+        import uuid
+        if upload_id is None:
+            upload_id = str(uuid.uuid4())
+        upload_prefix = upload_id[:8]  # First 8 chars for prefix
         
         mapping = {
             'cust_id': 'customer_id',
@@ -134,10 +159,20 @@ class DataIngestionService:
         
         for idx, row in enumerate(df.to_dict(orient='records')):
             try:
-                # ✅ Build raw_data with ALL fields
+                # ✅ Build raw_data, excluding customer_id to avoid duplicates
                 raw_data = {}
+                original_customer_id = None
+                
                 for k, v in row.items():
                     clean_k = str(k).lower().strip().replace(' ', '_')
+                    target_k = mapping.get(clean_k, clean_k)
+                    
+                    # ✅ Extract and skip customer_id (it's a table column)
+                    if target_k == 'customer_id':
+                        original_customer_id = str(v)
+                        continue  # Don't add to raw_data
+                    
+                    # Add all other fields to raw_data
                     if v is not None:
                         if isinstance(v, (np.integer, np.floating)):
                             raw_data[clean_k] = float(v) if isinstance(v, np.floating) else int(v)
@@ -148,20 +183,18 @@ class DataIngestionService:
                         else:
                             raw_data[clean_k] = str(v)
                 
-                # Extract customer_id
+                # ✅ Store original customer_id in raw_data
+                if original_customer_id:
+                    raw_data['original_customer_id'] = original_customer_id
+                else:
+                    raise ValueError("Missing customer_id")
+                
+                # Build processed_row with prefixed customer_id
                 processed_row = {
+                    'customer_id': f"{upload_prefix}_{original_customer_id}",
+                    'upload_id': upload_id,
                     'raw_data': raw_data
                 }
-                
-                for k, v in row.items():
-                    clean_k = str(k).lower().strip().replace(' ', '_')
-                    target_k = mapping.get(clean_k, clean_k)
-                    if target_k == 'customer_id':
-                        processed_row['customer_id'] = str(v)
-                        break
-                
-                if 'customer_id' not in processed_row:
-                    raise ValueError("Missing customer_id")
                 
                 valid_records.append(processed_row)
                 
@@ -169,11 +202,11 @@ class DataIngestionService:
                 errors.append({"row": idx + 2, "error": str(e)})
         
         computed_index = self._build_field_index(valid_records, 'customers')
-        extracted_accounts = self._extract_accounts_from_customers(valid_records)
+        extracted_accounts = self._extract_accounts_from_customers(valid_records, upload_id, upload_prefix)
         
         return valid_records, errors, computed_index, extracted_accounts
 
-    def _extract_accounts_from_customers(self, customer_records: List[dict]) -> List[dict]:
+    def _extract_accounts_from_customers(self, customer_records: List[dict], upload_id: str, upload_prefix: str) -> List[dict]:
         """
         Generates master Account records from Customer data.
         """
@@ -194,19 +227,26 @@ class DataIngestionService:
             raw = cust.get('raw_data', {})
             acc_num = raw.get('account_number')
             
+            # Generate account_id from raw data or create new
+            original_account_id = raw.get('account_id') or raw.get('account_number') or str(uuid.uuid4())
+            
             # Basic Account Dict
             account_data = {
-                "account_id": str(uuid.uuid4()),
-                "customer_id": cust['customer_id'],
-                "account_number": acc_num, # Might be None
-                "account_type": cust.get('account_type', 'Savings'), # Default
+                "account_id": f"{upload_prefix}_{original_account_id}",  # ✅ PREFIX account_id
+                "customer_id": cust['customer_id'],  # Already prefixed from customer processing
+                "upload_id": upload_id,  # ✅ Add upload_id
+                "account_number": acc_num,
+                "account_type": cust.get('account_type', 'Savings'),
                 "account_status": 'Active',
                 "currency_code": raw.get('currency', 'GBP'),
-                "account_open_date": datetime.utcnow(), # Default to now if not provided
-                "risk_rating": 'LOW', # Default
+                "account_open_date": datetime.utcnow(),
+                "risk_rating": 'LOW',
                 "is_pep": False,
                 "current_balance": 0,
-                "raw_data": {} # Storing extra account props here
+                "raw_data": {
+                    'original_account_id': original_account_id,  # ✅ Store original
+                    'original_customer_id': raw.get('original_customer_id')  # Pass through
+                }
             }
             
             # Try to populate more fields from raw_data if available

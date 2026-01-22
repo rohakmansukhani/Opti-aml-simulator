@@ -264,14 +264,22 @@ class AggregationProcessor:
             window_days = window_value * 30
         elif window_unit == 'hours':
             window_days = window_value / 24
-        else:
             window_days = window_value
         
         print(f"[ROLLING] Window: {window_days} days")
         
+        
         # Calculate rolling aggregation per customer
         results = []
-        entity_key = 'customer_id' if 'customer_id' in group_fields else group_fields[0]
+        # ✅ FIX: Use correct customer column based on what's actually in DataFrame
+        if 'customer_id' in df.columns:
+            entity_key = 'customer_id'
+        elif 'original_customer_id' in df.columns:
+            entity_key = 'original_customer_id'
+        else:
+            entity_key = group_fields[0] if group_fields else 'customer_id'
+        
+        print(f"[ROLLING] Using entity_key: {entity_key}")
         
         for customer_id in df[entity_key].unique():
             cust_df = df[df[entity_key] == customer_id].copy()
@@ -296,8 +304,9 @@ class AggregationProcessor:
                 else:
                     agg_value = window_df[field].sum()
                 
+                # ✅ Always output 'customer_id' in results (use prefixed version if available)
                 results.append({
-                    entity_key: customer_id,
+                    'customer_id': customer_id,  # This will be the prefixed ID
                     'alert_date': txn_date,
                     'aggregated_value': agg_value,
                     'transaction_count': len(window_df),
@@ -506,6 +515,7 @@ class UniversalScenarioEngine:
             customers: Customer DataFrame
             required_fields: Set of customer fields needed (from _get_required_customer_fields)
             
+            
         Returns:
             Merged DataFrame with customer fields if needed, otherwise original transactions
             
@@ -513,6 +523,11 @@ class UniversalScenarioEngine:
             >>> enriched = engine._smart_merge_customers(txns, custs, {'occupation'})
             >>> assert 'occupation' in enriched.columns
         """
+        # ✅ FIX: Always merge common customer fields that scenarios often use
+        # These fields don't have 'customer_' prefix but come from customers table
+        always_merge = {'account_type', 'annual_income', 'risk_score', 'occupation', 'customer_name'}
+        required_fields = required_fields.union(always_merge)
+        
         if not required_fields:
             print("[OPTIMIZATION] No customer fields needed - skipping merge")
             return transactions.copy()
@@ -619,16 +634,30 @@ class UniversalScenarioEngine:
         if aggregated.empty:
             print("[WARN] No data after aggregation")
             return []
+        
+        # ✅ DEBUG: Check aggregated data
+        print(f"[DEBUG] Aggregated data shape: {aggregated.shape}")
+        if 'aggregated_value' in aggregated.columns:
+            print(f"[DEBUG] Sample aggregated_value: {aggregated['aggregated_value'].head().tolist()}")
+        print(f"[DEBUG] Aggregated columns: {list(aggregated.columns)}")
 
         
         # Step 4: Thresholds
         with_thresh = self.threshold_processor.apply_thresholds(aggregated, customers, scenario_config.threshold)
+        
+        # ✅ DEBUG: Check threshold application
+        print(f"[DEBUG] After thresholds: {len(with_thresh)} rows")
+        if 'threshold' in with_thresh.columns:
+            print(f"[DEBUG] Sample threshold: {with_thresh['threshold'].head().tolist()}")
+        if 'aggregated_value' in with_thresh.columns:
+            print(f"[DEBUG] Values vs thresholds: {list(zip(with_thresh['aggregated_value'].head(), with_thresh.get('threshold', [None]*5).head()))}")
 
         
         # Step 5: Conditions
         alerts_df = self.condition_evaluator.evaluate_condition(with_thresh, scenario_config.alert_condition)
         if alerts_df.empty:
             print("[INFO] No alerts triggered")
+            print(f"[DEBUG] Condition config: {scenario_config.alert_condition}")
             return []
 
         

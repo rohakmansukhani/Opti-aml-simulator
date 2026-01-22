@@ -40,15 +40,24 @@ class TTLManager:
         txn_count: int,
         cust_count: int,
         schema_snapshot: dict,
-        ttl_hours: int = DEFAULT_TTL_HOURS
+        ttl_hours: int = DEFAULT_TTL_HOURS,
+        upload_id: str = None  # ✅ Optional pre-generated upload_id
     ) -> uuid.UUID:
         """
         Create a new upload metadata record.
         
+        Args:
+            upload_id: Optional pre-generated UUID (for ID prefixing consistency)
+        
         Returns:
             upload_id (UUID object)
         """
-        upload_id = uuid.uuid4()  # Native UUID object
+        # ✅ Use provided upload_id or generate new one
+        if upload_id:
+            upload_id = uuid.UUID(upload_id) if isinstance(upload_id, str) else upload_id
+        else:
+            upload_id = uuid.uuid4()  # Native UUID object
+        
         expires_at = TTLManager.set_expiry(ttl_hours)
         
         # Serialize schema to JSON string

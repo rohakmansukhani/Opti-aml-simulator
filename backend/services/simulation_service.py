@@ -412,7 +412,20 @@ class SimulationService:
                     return val.iloc[0] if len(val) > 0 else default
                 return val
             
+            # ✅ Extract customer_id with fallback to lookup from transactions
             customer_id = extract_value(alert_data, 'customer_id')
+            
+            # If customer_id is None, try to get it from involved transactions
+            if customer_id is None or str(customer_id) == 'None':
+                involved_txns = alert_data.get('involved_transactions', [])
+                if involved_txns and not transactions_df.empty:
+                    # Get customer_id from first involved transaction
+                    first_txn_id = involved_txns[0] if isinstance(involved_txns, list) else involved_txns
+                    matching_txn = transactions_df[transactions_df['transaction_id'] == first_txn_id]
+                    if not matching_txn.empty:
+                        customer_id = matching_txn.iloc[0]['customer_id']
+                        print(f"[FIX] Mapped customer_id from transaction: {customer_id}")
+            
             customer_name = extract_value(alert_data, 'customer_name', 'Unknown')
             scenario_id = extract_value(alert_data, 'scenario_id')
             scenario_name = extract_value(alert_data, 'scenario_name')
@@ -479,6 +492,14 @@ class SimulationService:
 
         # Execute Bulk Inserts
         if alert_mappings:
+            # ✅ DEBUG: Check customer_id values before insert
+            print(f"[ALERT DEBUG] Creating {len(alert_mappings)} alerts")
+            if alert_mappings:
+                sample_alert = alert_mappings[0]
+                print(f"[ALERT DEBUG] Sample alert:")
+                print(f"  customer_id: '{sample_alert.get('customer_id')}'")
+                print(f"  trigger_details: {sample_alert.get('trigger_details', {})}")
+            
             self.db.bulk_insert_mappings(Alert, alert_mappings)
         
         if trace_mappings:

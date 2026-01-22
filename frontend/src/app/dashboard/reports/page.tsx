@@ -22,6 +22,7 @@ import {
 } from '@mui/material';
 import { FileText, Download, Calendar, TrendingUp } from 'lucide-react';
 import { formatDateIST, formatIST } from '@/lib/date-utils';
+import { parseCustomerId } from '@/utils/idUtils';
 
 interface ReportSummary {
     total_scenarios: number;
@@ -331,7 +332,7 @@ export default function ReportsPage() {
                                 <TableBody>
                                     {detailsDialog.alerts.map((alert) => (
                                         <TableRow key={alert.alert_id} hover>
-                                            <TableCell className="font-mono text-sm">{alert.customer_id}</TableCell>
+                                            <TableCell className="font-mono text-sm">{parseCustomerId(alert.customer_id)}</TableCell>
                                             <TableCell>{alert.scenario_name}</TableCell>
                                             <TableCell>
                                                 <span className={`px-2 py-1 rounded text-xs font-bold ${alert.risk_score > 70 ? 'bg-red-100 text-red-700' :

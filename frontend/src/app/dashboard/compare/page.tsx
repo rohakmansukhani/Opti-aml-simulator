@@ -32,6 +32,7 @@ import {
     Download
 } from 'lucide-react';
 import { formatDateIST } from '@/lib/date-utils';
+import { parseCustomerId } from '@/utils/idUtils';
 import {
     CircularProgress,
     Button,
@@ -754,7 +755,7 @@ function ComparisonPageContent() {
                             {data.granular_diff.map((item, idx) => (
                                 <tr key={idx} className="hover:bg-slate-50">
                                     <td className="px-6 py-4 text-sm font-medium text-slate-900">
-                                        {item.customer_id}
+                                        {parseCustomerId(item.customer_id)}
                                     </td>
                                     <td className="px-6 py-4 text-sm text-slate-600">
                                         <div className="flex items-center">

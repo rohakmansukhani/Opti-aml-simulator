@@ -29,15 +29,124 @@ async def upload_transactions(
     content = await file.read()
     service = DataIngestionService()
     
+    # ===== CHECK FOR EXISTING UPLOAD FIRST (for merge) =====
+    existing_upload_record = db.query(DataUpload).filter(
+        DataUpload.user_id == user_id,
+        DataUpload.status == 'active',
+        DataUpload.expires_at > datetime.now(timezone.utc)
+    ).order_by(DataUpload.upload_timestamp.desc()).first()
+    
+    upload_id = None
+    should_merge = False
+    
+    # ✅ HANDLE force_replace EARLY (delete only transactions, keep customers!)
+    if existing_upload_record and force_replace:
+        print(f"[FORCE_REPLACE] Deleting ONLY transactions from upload: {existing_upload_record.upload_id}")
+        
+        try:
+            # Get all upload IDs for this user
+            prev_upload_ids = [u.upload_id for u in db.query(DataUpload.upload_id).filter(
+                DataUpload.user_id == user_id
+            ).all()]
+            
+            # Delete simulation data (alerts depend on transactions)
+            prev_run_ids = [r.run_id for r in db.query(SimulationRun.run_id).filter(
+                SimulationRun.user_id == user_id
+            ).all()]
+            
+            if prev_run_ids:
+                prev_alert_ids = [a.alert_id for a in db.query(Alert.alert_id).filter(
+                    Alert.run_id.in_(prev_run_ids)
+                ).all()]
+                
+                if prev_alert_ids:
+                    db.query(AlertTransaction).filter(
+                        AlertTransaction.alert_id.in_(prev_alert_ids)
+                    ).delete(synchronize_session=False)
+                    print(f"[FORCE_REPLACE] Deleted alert_transactions")
+                    
+                db.query(Alert).filter(Alert.run_id.in_(prev_run_ids)).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted alerts")
+                
+                db.query(SimulationRun).filter(SimulationRun.run_id.in_(prev_run_ids)).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted simulation runs")
+            
+            # ✅ DELETE ONLY TRANSACTIONS (keep customers and accounts!)
+            if prev_upload_ids:
+                txn_count = db.query(Transaction).filter(
+                    Transaction.upload_id.in_(prev_upload_ids)
+                ).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted {txn_count} transactions")
+                
+                # Delete transaction field indices
+                db.query(FieldValueIndex).filter(
+                    FieldValueIndex.upload_id.in_(prev_upload_ids),
+                    FieldValueIndex.table_name == 'transactions'
+                ).delete(synchronize_session=False)
+                
+                db.query(FieldMetadata).filter(
+                    FieldMetadata.upload_id.in_(prev_upload_ids),
+                    FieldMetadata.table_name == 'transactions'
+                ).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted transaction field indices")
+                
+                # Update DataUpload record (set txn count to 0, keep customer count)
+                db.query(DataUpload).filter(
+                    DataUpload.upload_id.in_(prev_upload_ids)
+                ).update({
+                    'record_count_transactions': 0
+                }, synchronize_session=False)
+                print(f"[FORCE_REPLACE] Reset transaction counts in upload records")
+            
+            db.commit()
+            print(f"[FORCE_REPLACE] Deletion committed successfully")
+            
+            # ✅ REUSE EXISTING UPLOAD_ID (don't create new one!)
+            upload_id = str(existing_upload_record.upload_id)
+            should_merge = True
+            print(f"[FORCE_REPLACE] Reusing upload_id: {upload_id}")
+            
+        except Exception as e:
+            print(f"[ERROR] Force replace deletion failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            db.rollback()
+            raise HTTPException(500, f"Failed to delete old data: {str(e)}")
+    
+    # MERGE CHECK: Recent customers upload without transactions (if not force_replace)
+    if existing_upload_record and not force_replace and upload_id is None:
+        upload_age = (datetime.now(timezone.utc) - existing_upload_record.upload_timestamp).total_seconds()
+        
+        # ✅ MERGE MODE: Customers exist, transactions don't, recent upload (< 5 min)
+        if (existing_upload_record.record_count_customers > 0 and 
+            existing_upload_record.record_count_transactions == 0 and 
+            upload_age < 300):
+            
+            # ✅ REUSE EXISTING UPLOAD_ID for matching prefixes
+            upload_id = str(existing_upload_record.upload_id)
+            should_merge = True
+            print(f"[MERGE MODE] Reusing upload_id: {upload_id}")
+            print(f"[MERGE MODE] Upload age: {upload_age:.1f} seconds")
+    
+    # ✅ Generate NEW upload_id only if NOT merging
+    if upload_id is None:
+        import uuid
+        upload_id = str(uuid.uuid4())
+        print(f"[NEW UPLOAD] Generated upload_id: {upload_id}")
+    
+    
+    # ✅ NOW process with the correct upload_id
     try:
-        # Changed to unpack 3 values
-        valid_records, errors, computed_index = service.process_transactions_csv(content, file.filename)
+        # ✅ Pass upload_id to service for prefixing
+        valid_records, errors, computed_index = service.process_transactions_csv(content, file.filename, upload_id)
         
         # [DEBUG]
         print(f"[DEBUG] Upload Transactions File: {file.filename}")
         print(f"[DEBUG] Valid Transaction Records: {len(valid_records)}")
         if valid_records:
             print(f"[DEBUG] First 3 Txn IDs: {[r.get('transaction_id') for r in valid_records[:3]]}")
+            print(f"[DEBUG] First 3 Customer IDs: {[r.get('customer_id') for r in valid_records[:3]]}")
+            print(f"[DEBUG] Upload ID being used: {upload_id}")
     except Exception as e:
          raise HTTPException(400, str(e))
     
@@ -59,22 +168,35 @@ async def upload_transactions(
                 "recommendation": "connect_external_db"
             })
         
-    # ===== UPLOAD ID DECISION LOGIC =====
-    upload_id = None
+        # ✅ VERIFY CUSTOMERS EXIST before proceeding
+        sample_cust_id = valid_records[0]['customer_id']
+        customer_check = db.query(Customer).filter(
+            Customer.customer_id == sample_cust_id,
+            Customer.upload_id == upload_id
+        ).first()
+        
+        if customer_check:
+            print(f"[DEBUG] ✅ Customer {sample_cust_id} EXISTS in database")
+        else:
+            print(f"[DEBUG] ❌ Customer {sample_cust_id} NOT FOUND!")
+            print(f"[DEBUG] Checking all customers with upload_id {upload_id}...")
+            all_custs = db.query(Customer.customer_id).filter(
+                Customer.upload_id == upload_id
+            ).limit(5).all()
+            print(f"[DEBUG] Found {len(all_custs)} customers: {[c.customer_id for c in all_custs]}")
+            
+            if len(all_custs) == 0:
+                raise HTTPException(400, 
+                    "No customers found for this upload. Please upload customers first before uploading transactions."
+                )
+    
+    # ===== HANDLE EXISTING DATA CONFLICTS =====
     expires_at = None
-    should_merge = False
     
-    # CHECK FOR EXISTING DATA
-    existing_upload_record = db.query(DataUpload).filter(
-        DataUpload.user_id == user_id,
-        DataUpload.status == 'active',
-        DataUpload.expires_at > datetime.now(timezone.utc)
-    ).order_by(DataUpload.upload_timestamp.desc()).first()
-    
-    if existing_upload_record and not force_replace:
+    if existing_upload_record and not force_replace and not should_merge:
         upload_age = (datetime.now(timezone.utc) - existing_upload_record.upload_timestamp).total_seconds()
         
-        # Same file check
+        # Same file check (extend TTL)
         if existing_upload_record.filename == file.filename and \
            abs(existing_upload_record.record_count_transactions - len(valid_records)) < 10:
             TTLManager.extend_ttl(db, existing_upload_record.upload_id, additional_hours=24)
@@ -87,21 +209,8 @@ async def upload_transactions(
                 "action": "ttl_extended"
             }
         
-        # Merge check: customers exist, transactions don't, recent upload
-        if existing_upload_record.record_count_customers > 0 and \
-           existing_upload_record.record_count_transactions == 0 and \
-           upload_age < 300:
-            # MERGE MODE
-            upload_id = existing_upload_record.upload_id
-            expires_at = existing_upload_record.expires_at
-            should_merge = True
-            
-            # Update record
-            existing_upload_record.record_count_transactions = len(valid_records)
-            existing_upload_record.filename = f"{existing_upload_record.filename}+{file.filename}"
-            db.commit()
-        else:
-            # Conflict
+        # Conflict: Transactions already exist
+        if existing_upload_record.record_count_transactions > 0:
             raise HTTPException(409, detail={
                 "error": "existing_data_conflict",
                 "message": f"Active data exists ({existing_upload_record.filename}). Use force_replace=true to replace.",
@@ -110,20 +219,32 @@ async def upload_transactions(
                 "suggestion": "Add ?force_replace=true to URL"
             })
     
+    # ===== UPDATE OR CREATE UPLOAD RECORD =====
+    if should_merge:
+        # Update existing upload record
+        existing_upload_record.record_count_transactions = len(valid_records)
+        existing_upload_record.filename = f"{existing_upload_record.filename}+{file.filename}"
+        expires_at = existing_upload_record.expires_at
+        db.commit()
+        print(f"[MERGE MODE] Updated existing upload record")
+    
     # CREATE NEW UPLOAD (only if not merging)
     if not should_merge:
-        upload_id = TTLManager.create_upload_record(
+        # Use the upload_id we already generated and used for prefixing
+        upload_record_id = TTLManager.create_upload_record(
             db=db,
             user_id=user_id,
             filename=file.filename,
             txn_count=len(valid_records),
             cust_count=0,
             schema_snapshot={"columns": list(df.columns)},
-            ttl_hours=48
+            ttl_hours=48,
+            upload_id=upload_id  # Pass our pre-generated ID
         )
+        # upload_id stays the same
         expires_at = TTLManager.set_expiry(48)
     
-    # ===== DATA INSERTION =====
+
     # ===== DATA INSERTION =====
     for record in valid_records:
         record['upload_id'] = upload_id
@@ -371,8 +492,13 @@ async def upload_customers(
     content = await file.read()
     service = DataIngestionService()
     
+    # ✅ Generate upload_id EARLY (before processing)
+    import uuid
+    upload_id = str(uuid.uuid4())
+    
     try:
-        valid_records, errors, computed_index, extracted_accounts = service.process_customers_csv(content, file.filename)
+        # ✅ Pass upload_id to service for prefixing
+        valid_records, errors, computed_index, extracted_accounts = service.process_customers_csv(content, file.filename, upload_id)
         
         # [DEBUG]
         print(f"[DEBUG] Upload Customers File: {file.filename}")
@@ -405,7 +531,7 @@ async def upload_customers(
         DataUpload.expires_at > datetime.now(timezone.utc)
     ).order_by(DataUpload.upload_timestamp.desc()).first()
     
-    upload_id = None
+    # Note: upload_id already generated above for prefixing
     expires_at = None
     should_merge = False
     
@@ -508,8 +634,13 @@ async def upload_customers(
         if (existing_upload_record.record_count_transactions > 0 and 
             existing_upload_record.record_count_customers == 0 and 
             upload_age < 300):
+            # MERGE MODE - reuse existing upload_id
+            # Re-process with existing upload_id for proper prefixing
+            existing_upload_id = existing_upload_record.upload_id
             
-            upload_id = existing_upload_record.upload_id
+            valid_records, errors, computed_index, extracted_accounts = service.process_customers_csv(content, file.filename, str(existing_upload_id))
+            
+            upload_id = existing_upload_id
             expires_at = existing_upload_record.expires_at
             should_merge = True
             
@@ -529,15 +660,18 @@ async def upload_customers(
     
     # 6. Create new upload if not merging
     if not should_merge:
-        upload_id = TTLManager.create_upload_record(
+        # Use the upload_id we already generated and used for prefixing
+        upload_record_id = TTLManager.create_upload_record(
             db=db,
             user_id=user_id,
             filename=file.filename,
             txn_count=0,
             cust_count=len(valid_records),
             schema_snapshot={"columns": list(df.columns)},
-            ttl_hours=48
+            ttl_hours=48,
+            upload_id=upload_id  # Pass our pre-generated ID
         )
+        # upload_id stays the same
         expires_at = TTLManager.set_expiry(48)
     
     # VALIDATION: Ensure upload_id is set
