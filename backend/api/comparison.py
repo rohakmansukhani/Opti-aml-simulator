@@ -143,3 +143,36 @@ async def compare_runs_legacy(
         refined_run_id=refined_id
     )
     return await compare_runs(request, user_data, db)
+@router.get("/export")
+async def export_comparison(
+    baseline_run_id: str,
+    refined_run_id: str,
+    user_data: dict = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """
+    Export the full granular difference between two runs as a CSV.
+    """
+    user_id = user_data.get("sub")
+    
+    try:
+        baseline_id = resolve_to_run_id(db, user_id, baseline_run_id)
+        refined_id = resolve_to_run_id(db, user_id, refined_run_id)
+        
+        engine = ComparisonEngine(db)
+        csv_content = engine.export_comparison_csv(baseline_id, refined_id)
+        
+        from fastapi.responses import Response
+        return Response(
+            content=csv_content,
+            media_type="text/csv",
+            headers={
+                "Content-Disposition": f"attachment; filename=comparison_diff_{baseline_run_id[:8]}_vs_{refined_run_id[:8]}.csv"
+            }
+        )
+        
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error("export_failed", error=str(e))
+        raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")

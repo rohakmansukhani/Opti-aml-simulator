@@ -64,7 +64,7 @@ export default function Dashboard() {
                 // Fetch Scenarios and Stats in parallel
                 const [statsRes, scenariosRes] = await Promise.all([
                     api.get('/api/dashboard/stats'),
-                    api.get('/api/config/scenarios')
+                    api.get('/api/rules/scenarios')
                 ]);
 
                 if (statsRes.status === 200) setStats(statsRes.data);

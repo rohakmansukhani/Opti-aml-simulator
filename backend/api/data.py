@@ -4,6 +4,7 @@ from sqlalchemy import text, inspect
 from datetime import datetime, timezone
 import pandas as pd
 import io
+import json
 
 from database import get_db
 from services.data_ingestion import DataIngestionService
@@ -31,6 +32,12 @@ async def upload_transactions(
     try:
         # Changed to unpack 3 values
         valid_records, errors, computed_index = service.process_transactions_csv(content, file.filename)
+        
+        # [DEBUG]
+        print(f"[DEBUG] Upload Transactions File: {file.filename}")
+        print(f"[DEBUG] Valid Transaction Records: {len(valid_records)}")
+        if valid_records:
+            print(f"[DEBUG] First 3 Txn IDs: {[r.get('transaction_id') for r in valid_records[:3]]}")
     except Exception as e:
          raise HTTPException(400, str(e))
     
@@ -117,10 +124,11 @@ async def upload_transactions(
         expires_at = TTLManager.set_expiry(48)
     
     # ===== DATA INSERTION =====
+    # ===== DATA INSERTION =====
     for record in valid_records:
         record['upload_id'] = upload_id
         record['expires_at'] = expires_at
-    
+
     try:
         # Clear old data (only if NOT merging)
         if not should_merge:
@@ -130,7 +138,6 @@ async def upload_transactions(
             ).all()]
             prev_run_ids = [r.run_id for r in db.query(SimulationRun.run_id).filter(SimulationRun.user_id == user_id).all()]
             
-
             prev_alert_ids = [a.alert_id for a in db.query(Alert.alert_id).filter(Alert.run_id.in_(prev_run_ids)).all()]
             
             if prev_alert_ids:
@@ -142,17 +149,59 @@ async def upload_transactions(
                 db.query(FieldValueIndex).filter(FieldValueIndex.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
                 db.query(FieldMetadata).filter(FieldMetadata.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
             
-            # EXTRA SAFETY: Delete specific records in the current batch that would cause unique conflicts
-            incoming_txn_ids = [r['transaction_id'] for r in valid_records if 'transaction_id' in r]
-            if incoming_txn_ids:
-                db.query(Transaction).filter(Transaction.transaction_id.in_(incoming_txn_ids)).delete(synchronize_session=False)
-                
-        db.flush()
+            db.commit()  # Commit deletion before insert
         
-        db.bulk_insert_mappings(Transaction, valid_records)
+        # USE UPSERT FOR TRANSACTIONS
+        print(f"[UPLOAD] Upserting {len(valid_records)} transactions...")
+        
+        from sqlalchemy import insert
+        
+        # USE BATCH UPSERT FOR TRANSACTIONS (much faster!)
+        print(f"[UPLOAD] Upserting {len(valid_records)} transactions...")
+        
+        # Use RAW psycopg2 cursor to bypass SQLAlchemy parameter issues
+        connection = db.connection().connection
+        cursor = connection.cursor()
+        
+        # Deduplicate
+        unique_txns = {r['transaction_id']: r for r in valid_records}
+        valid_records = list(unique_txns.values())
+        
+        batch_size = 500
+        for i in range(0, len(valid_records), batch_size):
+            batch = valid_records[i:i+batch_size]
+            placeholders = []
+            values = []
+            
+            for record in batch:
+                placeholders.append("(%s, %s, %s::uuid, %s::jsonb, %s, %s)")
+                values.extend([
+                    record['transaction_id'],
+                    record.get('customer_id'),
+                    str(record['upload_id']),
+                    json.dumps(record['raw_data']),
+                    record['expires_at'],
+                    record.get('created_at', datetime.now(timezone.utc))
+                ])
+            
+            sql = f"""
+                INSERT INTO transactions (transaction_id, customer_id, upload_id, raw_data, expires_at, created_at)
+                VALUES {','.join(placeholders)}
+                ON CONFLICT (transaction_id, upload_id)
+                DO UPDATE SET
+                    customer_id = EXCLUDED.customer_id,
+                    raw_data = EXCLUDED.raw_data,
+                    expires_at = EXCLUDED.expires_at,
+                    created_at = EXCLUDED.created_at
+            """
+            cursor.execute(sql, values)
+            print(f"[UPLOAD] Processed {min(i+batch_size, len(valid_records))}/{len(valid_records)} transactions")
+        
+        cursor.close()
+        print(f"[UPLOAD] Upserted {len(valid_records)} transactions")
         
         # Save Field Metadata & Index
-        print(f"Saving {len(computed_index)} field indices...")
+        print(f"[UPLOAD] Saving {len(computed_index)} field indices...")
         for field_name, data in computed_index.items():
             metadata = data['metadata']
             values = data['values']
@@ -176,9 +225,15 @@ async def upload_transactions(
                 db.add(db_val)
         
         db.commit()
+        print(f"[UPLOAD] Successfully committed all data")
+        
     except Exception as e:
+        print(f"[ERROR] Database insertion failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         db.rollback()
         raise HTTPException(400, f"Database error: {str(e)}")
+
     
     return {
         "status": "success",
@@ -248,6 +303,7 @@ async def get_data_schema(
             })
     
     # Extract customer fields from raw_data
+    # Extract customer fields from raw_data
     sample_cust = db.query(Customer).filter(
         Customer.upload_id == latest_upload.upload_id
     ).first()
@@ -260,11 +316,32 @@ async def get_data_schema(
                 "label": field_name.replace('_', ' ').title(),
                 "sql_type": infer_type(field_value)
             })
-    
-    # Fallback to basic schema if no data found
-    if not schema_response["transactions"] and not schema_response["customers"]:
-        return {
-            "transactions": [
+            
+    # Fallback: If no customers in current upload, try to find ANY customer to infer schema
+    if not schema_response["customers"]:
+        any_sample_cust = db.query(Customer).order_by(Customer.created_at.desc()).first()
+        if any_sample_cust and any_sample_cust.raw_data:
+             for field_name, field_value in any_sample_cust.raw_data.items():
+                schema_response["customers"].append({
+                    "name": field_name,
+                    "type": infer_type(field_value),
+                    "label": field_name.replace('_', ' ').title(),
+                    "sql_type": infer_type(field_value)
+                })
+
+    # Hard Fallback: If still no customer schema, use defaults
+    if not schema_response["customers"]:
+        schema_response["customers"] = [
+            {"name": "customer_type", "type": "string", "label": "Customer Type"},
+            {"name": "occupation", "type": "string", "label": "Occupation"},
+            {"name": "annual_income", "type": "number", "label": "Annual Income"},
+            {"name": "risk_score", "type": "number", "label": "Risk Score"},
+            {"name": "customer_id", "type": "string", "label": "Customer ID"}
+        ]
+
+    # Fallback to basic schema if no data found (Transactions only)
+    if not schema_response["transactions"]:
+         schema_response["transactions"] = [
                 {"name": "transaction_amount", "type": "number", "label": "Transaction Amount"},
                 {"name": "transaction_type", "type": "string", "label": "Transaction Type"},
                 {"name": "channel", "type": "string", "label": "Channel"},
@@ -273,74 +350,150 @@ async def get_data_schema(
                 {"name": "beneficiary_name", "type": "string", "label": "Beneficiary Name"},
                 {"name": "beneficiary_bank", "type": "string", "label": "Beneficiary Bank"},
                 {"name": "transaction_date", "type": "date", "label": "Date"}
-            ],
-            "customers": [
-                {"name": "customer_type", "type": "string", "label": "Customer Type"},
-                {"name": "occupation", "type": "string", "label": "Occupation"},
-                {"name": "annual_income", "type": "number", "label": "Annual Income"},
-                {"name": "risk_score", "type": "number", "label": "Risk Score"},
-                {"name": "account_type", "type": "string", "label": "Account Type"}
             ]
-        }
 
     return schema_response
 
 @router.post("/upload/customers")
 async def upload_customers(
     file: UploadFile = File(...),
-    force_replace: bool = False,  # Query param to force replacement
+    force_replace: bool = False,
     user_payload: dict = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     user_id = user_payload.get("sub")
     
+    # 1. Validate file type
     if not file.filename.endswith(('.csv', '.xls', '.xlsx')):
         raise HTTPException(400, "Only CSV and Excel files are supported")
     
+    # 2. Process file
     content = await file.read()
     service = DataIngestionService()
+    
     try:
-        # Changed to unpack 4 values (added extracted_accounts)
         valid_records, errors, computed_index, extracted_accounts = service.process_customers_csv(content, file.filename)
+        
+        # [DEBUG]
+        print(f"[DEBUG] Upload Customers File: {file.filename}")
+        print(f"[DEBUG] Valid Customer Records: {len(valid_records)}")
+        if valid_records:
+            print(f"[DEBUG] First 3 Cust IDs: {[r.get('customer_id') for r in valid_records[:3]]}")
     except Exception as e:
         raise HTTPException(400, str(e))
     
     if not valid_records:
-        raise HTTPException(400, "No valid records found. Please ensure headers match: customer_id, customer_name, etc.")
-
-    if valid_records:
-        df = pd.DataFrame(valid_records)
-        
-        # SIZE VALIDATION
-        validation = UploadValidator.validate_size(df, "customers")
-        if not validation["allowed"]:
-            raise HTTPException(413, detail={
-                "error": "dataset_too_large",
-                "count": validation["count"],
-                "max_allowed": validation["max_allowed"],
-                "message": validation["message"],
-                "recommendation": "connect_external_db"
-            })
-        
-    # ===== UPLOAD ID DECISION LOGIC =====
-    upload_id = None
-    expires_at = None
-    should_merge = False
+        raise HTTPException(400, "No valid records found. Please ensure headers match customer_id, customer_name, etc.")
     
-    # CHECK FOR EXISTING DATA
+    # 3. Size validation
+    df = pd.DataFrame(valid_records)
+    validation = UploadValidator.validate_size(df, "customers")
+    
+    if not validation['allowed']:
+        raise HTTPException(413, detail={
+            "error": "dataset_too_large",
+            "count": validation['count'],
+            "max_allowed": validation['max_allowed'],
+            "message": validation['message'],
+            "recommendation": "connect_external_db"
+        })
+    
+    # 4. Check for existing data
     existing_upload_record = db.query(DataUpload).filter(
         DataUpload.user_id == user_id,
         DataUpload.status == 'active',
         DataUpload.expires_at > datetime.now(timezone.utc)
     ).order_by(DataUpload.upload_timestamp.desc()).first()
     
+    upload_id = None
+    expires_at = None
+    should_merge = False
+    
+    # FORCE REPLACE FIRST
+    if existing_upload_record and force_replace:
+        try:
+            print(f"[FORCE_REPLACE] Deleting existing upload: {existing_upload_record.upload_id}")
+            
+            # Find all previous upload IDs for this user
+            prev_upload_ids = [u.upload_id for u in db.query(DataUpload.upload_id).filter(
+                DataUpload.user_id == user_id
+            ).all()]
+            
+            print(f"[FORCE_REPLACE] Found {len(prev_upload_ids)} previous uploads: {prev_upload_ids}")
+            
+            # Find all previous run IDs
+            prev_run_ids = [r.run_id for r in db.query(SimulationRun.run_id).filter(
+                SimulationRun.user_id == user_id
+            ).all()]
+            
+            print(f"[FORCE_REPLACE] Found {len(prev_run_ids)} previous runs")
+            
+            # Delete cascade (in correct order to respect foreign keys)
+            if prev_run_ids:
+                # 1. Delete AlertTransaction (if exists)
+                try:
+                    alert_txn_count = db.query(AlertTransaction).filter(
+                        AlertTransaction.alert_id.in_(
+                            db.query(Alert.alert_id).filter(Alert.run_id.in_(prev_run_ids))
+                        )
+                    ).delete(synchronize_session=False)
+                    print(f"[FORCE_REPLACE] Deleted {alert_txn_count} alert_transactions")
+                except:
+                    pass  # Table might not exist
+                
+                # 2. Delete Alerts
+                alert_count = db.query(Alert).filter(Alert.run_id.in_(prev_run_ids)).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted {alert_count} alerts")
+                
+                # 3. Delete Simulation Runs
+                run_count = db.query(SimulationRun).filter(SimulationRun.run_id.in_(prev_run_ids)).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted {run_count} runs")
+            
+            if prev_upload_ids:
+                # 4. Delete Transactions
+                txn_count = db.query(Transaction).filter(Transaction.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted {txn_count} transactions")
+                
+                # 5. Delete Accounts
+                acc_count = db.query(Account).filter(Account.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted {acc_count} accounts")
+                
+                # 6. Delete Field Indices
+                idx_count = db.query(FieldValueIndex).filter(FieldValueIndex.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted {idx_count} field value indices")
+                
+                meta_count = db.query(FieldMetadata).filter(FieldMetadata.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted {meta_count} field metadata")
+                
+                # 7. Delete Customers (MUST be after Alerts are deleted due to FK)
+                cust_count = db.query(Customer).filter(Customer.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted {cust_count} customers")
+                
+                # 8. Delete DataUpload records
+                upload_count = db.query(DataUpload).filter(DataUpload.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+                print(f"[FORCE_REPLACE] Deleted {upload_count} data uploads")
+            
+            # CRITICAL: Commit the deletion BEFORE creating new records
+            db.commit()
+            print(f"[FORCE_REPLACE] Deletion committed successfully")
+            
+            existing_upload_record = None
+            
+        except Exception as e:
+            print(f"[ERROR] Force replace deletion failed: {str(e)}")
+            import traceback
+            traceback.print_exc()
+            db.rollback()
+            raise HTTPException(500, f"Failed to delete old data: {str(e)}")
+    
+    # 5. Handle existing data (if not force_replace)
     if existing_upload_record and not force_replace:
         upload_age = (datetime.now(timezone.utc) - existing_upload_record.upload_timestamp).total_seconds()
         
-        # Same file check
-        if existing_upload_record.filename == file.filename and \
-           abs(existing_upload_record.record_count_customers - len(valid_records)) < 5:
-            # Extend TTL
+        # Same file check (extend TTL)
+        if (existing_upload_record.filename == file.filename and 
+            abs(existing_upload_record.record_count_customers - len(valid_records)) <= 5):
+            
             TTLManager.extend_ttl(db, existing_upload_record.upload_id, additional_hours=24)
             return {
                 "status": "extended",
@@ -351,11 +504,11 @@ async def upload_customers(
                 "action": "ttl_extended"
             }
         
-        # Merge check: transactions exist, customers don't, recent upload
-        if existing_upload_record.record_count_transactions > 0 and \
-           existing_upload_record.record_count_customers == 0 and \
-           upload_age < 300:
-            # MERGE MODE
+        # Merge check (transactions exist, customers don't, recent upload)
+        if (existing_upload_record.record_count_transactions > 0 and 
+            existing_upload_record.record_count_customers == 0 and 
+            upload_age < 300):
+            
             upload_id = existing_upload_record.upload_id
             expires_at = existing_upload_record.expires_at
             should_merge = True
@@ -365,15 +518,16 @@ async def upload_customers(
             existing_upload_record.filename = f"{existing_upload_record.filename}+{file.filename}"
             db.commit()
         else:
-             raise HTTPException(409, detail={
+            # Conflict - ask user to force replace
+            raise HTTPException(409, detail={
                 "error": "existing_data_conflict",
                 "message": f"Active data exists ({existing_upload_record.filename}). Use force_replace=true to replace.",
                 "existing_upload_id": str(existing_upload_record.upload_id),
                 "expires_at": existing_upload_record.expires_at.isoformat(),
-                "suggestion": "Add ?force_replace=true to URL to replace existing data"
+                "suggestion": "Add ?force_replace=true to URL"
             })
     
-    # CREATE NEW UPLOAD (only if not merging)
+    # 6. Create new upload if not merging
     if not should_merge:
         upload_id = TTLManager.create_upload_record(
             db=db,
@@ -386,69 +540,101 @@ async def upload_customers(
         )
         expires_at = TTLManager.set_expiry(48)
     
-    # ===== DATA INSERTION =====
-    # Add TTL fields to records
+    # VALIDATION: Ensure upload_id is set
+    if not upload_id:
+        raise HTTPException(500, "Failed to create upload record")
+    
+    # 7. Add TTL fields to records
     for record in valid_records:
         record['upload_id'] = upload_id
         record['expires_at'] = expires_at
-        
+    
     for account in extracted_accounts:
         account['upload_id'] = upload_id
         account['expires_at'] = expires_at
     
+    # 8. Insert data
     try:
-        # Clear existing data ONLY for the current user
-        # (Only if NOT merging - merging appends to the same upload_id entity but we are inserting new rows for a different table)
-        if not should_merge:
-
+        print(f"[UPLOAD] Upserting {len(valid_records)} customers...")
+        
+        # Use RAW psycopg2 cursor (bypasses SQLAlchemy parameter conversion)
+        connection = db.connection().connection  # Get raw psycopg2 connection
+        cursor = connection.cursor()
+        
+        batch_size = 500
+        for i in range(0, len(valid_records), batch_size):
+            batch = valid_records[i:i+batch_size]
+            placeholders = []
+            values = []
             
-            # Find all previous upload IDs for this user
-            prev_upload_ids = [u.upload_id for u in db.query(DataUpload.upload_id).filter(
-                DataUpload.user_id == user_id,
-                DataUpload.upload_id != upload_id
-            ).all()]
-            # Find all previous run IDs for this user
-            prev_run_ids = [r.run_id for r in db.query(SimulationRun.run_id).filter(SimulationRun.user_id == user_id).all()]
+            for record in batch:
+                placeholders.append("(%s, %s::uuid, %s::jsonb, %s, %s)")
+                values.extend([
+                    record['customer_id'],
+                    str(record['upload_id']),
+                    json.dumps(record['raw_data']),
+                    record['expires_at'],
+                    record.get('created_at', datetime.now(timezone.utc))
+                ])
             
-            # 1. Delete Alerts linked to this user's runs
-            if prev_run_ids:
-                db.query(Alert).filter(Alert.run_id.in_(prev_run_ids)).delete(synchronize_session=False)
-            
-            # 2. Delete Transactions/Customers/Accounts linked to this user's uploads
-            if prev_upload_ids:
-                db.query(Transaction).filter(Transaction.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
-                # Cleanup Accounts
-                db.query(Account).filter(Account.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
-                # Cleanup Customers
-                db.query(Customer).filter(Customer.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
-                # Cleanup Indices
-                db.query(FieldValueIndex).filter(FieldValueIndex.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
-                db.query(FieldMetadata).filter(FieldMetadata.upload_id.in_(prev_upload_ids)).delete(synchronize_session=False)
+            sql = f"""
+                INSERT INTO customers (customer_id, upload_id, raw_data, expires_at, created_at)
+                VALUES {','.join(placeholders)}
+                ON CONFLICT (customer_id, upload_id) 
+                DO UPDATE SET
+                    raw_data = EXCLUDED.raw_data,
+                    expires_at = EXCLUDED.expires_at,
+                    created_at = EXCLUDED.created_at
+            """
+            cursor.execute(sql, values)
+            print(f"[UPLOAD] Processed {min(i+batch_size, len(valid_records))}/{len(valid_records)} customers")
         
-        # 3. EXTRA SAFETY: Delete specific records in the current batch
-        incoming_cust_ids = [r['customer_id'] for r in valid_records if 'customer_id' in r]
-        if incoming_cust_ids:
-            # Referenced tables first
-            db.query(Alert).filter(Alert.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
-            db.query(Transaction).filter(Transaction.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
-            db.query(Account).filter(Account.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
-            db.query(Customer).filter(Customer.customer_id.in_(incoming_cust_ids)).delete(synchronize_session=False)
+        cursor.close()
+        print(f"[UPLOAD] Upserted {len(valid_records)} customers")
         
-        db.flush()
-        
-        # Bulk Insert Customers & Accounts
-        db.bulk_insert_mappings(Customer, valid_records)
-        
+        # Insert accounts
         if extracted_accounts:
-            db.bulk_insert_mappings(Account, extracted_accounts)
-
-        # Save Field Metadata & Index
-        print(f"Saving {len(computed_index)} field indices for customers...")
+            print(f"[UPLOAD] Upserting {len(extracted_accounts)} accounts...")
+            cursor = db.connection().connection.cursor()
+            
+            batch_size = 500
+            for i in range(0, len(extracted_accounts), batch_size):
+                batch = extracted_accounts[i:i+batch_size]
+                placeholders = []
+                values = []
+                
+                for account in batch:
+                    placeholders.append("(%s, %s, %s::uuid, %s::jsonb, %s, %s)")
+                    values.extend([
+                        account['account_id'],
+                        account['customer_id'],
+                        str(account['upload_id']),
+                        json.dumps(account.get('raw_data', {})),
+                        account['expires_at'],
+                        account.get('created_at', datetime.now(timezone.utc))
+                    ])
+                
+                sql = f"""
+                    INSERT INTO accounts (account_id, customer_id, upload_id, raw_data, expires_at, created_at)
+                    VALUES {','.join(placeholders)}
+                    ON CONFLICT (account_id, upload_id) DO UPDATE SET
+                        customer_id = EXCLUDED.customer_id,
+                        raw_data = EXCLUDED.raw_data,
+                        expires_at = EXCLUDED.expires_at,
+                        created_at = EXCLUDED.created_at
+                """
+                cursor.execute(sql, values)
+            
+            cursor.close()
+            print(f"[UPLOAD] Upserted {len(extracted_accounts)} accounts")
+        
+        # Save field indices
+        print(f"[UPLOAD] Saving {len(computed_index)} field indices...")
         for field_name, data in computed_index.items():
             metadata = data['metadata']
             values = data['values']
             
-            # 1. Save Metadata
+            # Save metadata
             db_metadata = FieldMetadata(
                 upload_id=upload_id,
                 table_name='customers',
@@ -456,7 +642,7 @@ async def upload_customers(
             )
             db.add(db_metadata)
             
-            # 2. Save Values
+            # Save values
             for val in values:
                 db_val = FieldValueIndex(
                     upload_id=upload_id,
@@ -467,14 +653,20 @@ async def upload_customers(
                 db.add(db_val)
         
         db.commit()
+        print(f"[UPLOAD] Successfully committed all data")
+        
     except Exception as e:
+        print(f"[ERROR] Database insertion failed: {str(e)}")
+        import traceback
+        traceback.print_exc()
         db.rollback()
         raise HTTPException(400, f"Database error: {str(e)}")
-            
+    
     return {
         "status": "success",
         "records_uploaded": len(valid_records),
         "errors": len(errors),
+        "error_sample": errors[:5] if errors else [],
         "upload_id": str(upload_id) if valid_records else None,
         "expires_at": expires_at.isoformat() if valid_records else None,
         "action": "merged" if should_merge else "new_upload"

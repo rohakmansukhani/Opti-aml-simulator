@@ -168,48 +168,79 @@ class ComparisonEngine:
     def _calculate_granular_diff(
         self,
         baseline_alerts: List[Alert],
-        refined_alerts: List[Alert]
+        refined_alerts: List[Alert],
+        limit: int = 50
     ) -> List[Dict[str, Any]]:
         """
-        Calculate customer-level granular diff.
-        
-        Strategy: Customer-centric matching
-        - Identifies customers with alerts in baseline but not in refined
-        - Business cares: "Did we suppress alerts for risky customers?"
-        
-        Returns:
-            List of {customer_id, status, alert_count, total_amount}
-            Limited to top 50 for UI performance
+        Calculate customer-level granular diff with optimized transaction loading.
         """
-        # Extract customer IDs from both sets
+        from models import Transaction
+        
+        # Extract customer IDs
         baseline_customers = set(alert.customer_id for alert in baseline_alerts)
         refined_customers = set(alert.customer_id for alert in refined_alerts)
-        
-        # Find removed customers (alerts suppressed by refinement)
         removed_customers = baseline_customers - refined_customers
         
-        # Build detailed diff with aggregated metrics
+        # ✅ BATCH LOAD ALL TRANSACTIONS ONCE
+        all_transaction_ids = set()
+        for alert in baseline_alerts:
+            # Use relationship: alert.alert_transactions (list of AlertTransaction objects)
+            if alert.alert_transactions:
+                for at in alert.alert_transactions:
+                    all_transaction_ids.add(at.transaction_id)
+        
+        # Single DB query for all transactions
+        transactions_map = {}
+        if all_transaction_ids:
+            transactions = self.db.query(Transaction).filter(
+                Transaction.transaction_id.in_(all_transaction_ids)
+            ).all()
+            
+            transactions_map = {
+                txn.transaction_id: txn for txn in transactions
+            }
+        
+        # Build granular diff
         granular_diff = []
         
         for customer_id in removed_customers:
-            # Get all baseline alerts for this customer
             customer_alerts = [
                 alert for alert in baseline_alerts 
                 if alert.customer_id == customer_id
             ]
             
-            # Aggregate metrics
             alert_count = len(customer_alerts)
-            total_amount = sum(
-                alert.aggregated_amount or 0 
-                for alert in customer_alerts
-            )
+            
+            # ✅ CALCULATE AMOUNT USING PRE-LOADED TRANSACTIONS
+            total_amount = 0.0
+            for alert in customer_alerts:
+                if alert.alert_transactions:
+                    for at in alert.alert_transactions:
+                        txn_id = at.transaction_id
+                        txn = transactions_map.get(txn_id)
+                        if txn:
+                            try:
+                                amount = txn.raw_data.get('transaction_amount', 0)
+                                total_amount += float(amount)
+                            except (ValueError, TypeError):
+                                pass
             
             # Get highest risk score
-            max_risk_score = max(
-                (alert.risk_score or 0 for alert in customer_alerts),
-                default=0
-            )
+            max_risk_score = 0
+            for alert in customer_alerts:
+                if hasattr(alert, 'risk_score') and alert.risk_score:
+                    max_risk_score = max(max_risk_score, alert.risk_score)
+                else:
+                    severity_map = {
+                        'Critical': 90,
+                        'High': 75,
+                        'Medium': 50,
+                        'Low': 25
+                    }
+                    max_risk_score = max(
+                        max_risk_score, 
+                        severity_map.get(alert.severity, 50)
+                    )
             
             granular_diff.append({
                 "customer_id": customer_id,
@@ -218,20 +249,23 @@ class ComparisonEngine:
                 "total_amount": round(total_amount, 2),
                 "max_risk_score": round(max_risk_score, 2),
                 "scenarios": list(set(
-                    alert.scenario_id for alert in customer_alerts
+                    alert.scenario_id for alert in customer_alerts 
+                    if hasattr(alert, 'scenario_id') and alert.scenario_id
                 ))
             })
         
-        # Sort by risk score (highest first) and limit to top 50
+        # Sort by risk score (highest first)
         granular_diff.sort(key=lambda x: x["max_risk_score"], reverse=True)
         
         logger.info(
             "granular_diff_calculated",
             removed_customers=len(removed_customers),
-            top_50_limited=len(granular_diff[:50])
+            total_diff=len(granular_diff)
         )
         
-        return granular_diff[:50]
+        if limit:
+            return granular_diff[:limit]
+        return granular_diff
     
     def _analyze_risk(
         self,
@@ -242,22 +276,11 @@ class ComparisonEngine:
         """
         Analyze risk of suppressed alerts (Red-Teaming).
         
-        Current: Placeholder implementation
-        Future: Integrate RiskEngine for deep analysis
-        
-        Returns:
-            {
-                "risk_score": float (0-100),
-                "risk_level": str (SAFE/CAUTION/DANGEROUS/CRITICAL),
-                "sample_exploits": List[str],
-                "high_risk_suppressions": int
-            }
+        UPDATED: Per user request, ALL alerts are considered "High Risk".
+        We no longer filter by risk_score > 70 for the critical count.
         """
-        # Count high-risk suppressions (risk_score > 70)
-        high_risk_suppressions = sum(
-            1 for item in granular_diff 
-            if item["max_risk_score"] > 70
-        )
+        # Count high-risk suppressions (User Request: All alerts are high risk)
+        high_risk_suppressions = len(granular_diff)
         
         # Calculate overall risk score
         if not granular_diff:
@@ -271,9 +294,9 @@ class ComparisonEngine:
             )[:10]
             risk_score = sum(top_risks) / len(top_risks) if top_risks else 0.0
             
-            # Classify risk level
-            if risk_score >= 75:
-                risk_level = "CRITICAL"
+            # Classify risk level - stricter since everything is critical
+            if high_risk_suppressions > 0:
+                risk_level = "CRITICAL" # Any suppression is critical now
             elif risk_score >= 50:
                 risk_level = "DANGEROUS"
             elif risk_score >= 25:
@@ -281,15 +304,15 @@ class ComparisonEngine:
             else:
                 risk_level = "SAFE"
         
-        # Generate sample exploits (top 3 high-risk suppressions)
+        # Generate sample exploits (top 3 suppressions)
         sample_exploits = []
         for item in granular_diff[:3]:
-            if item["max_risk_score"] > 50:
-                sample_exploits.append(
-                    f"Customer {item['customer_id']}: "
-                    f"${item['total_amount']:,.0f} suppressed "
-                    f"(risk: {item['max_risk_score']})"
-                )
+            # Always include, no score threshold
+            sample_exploits.append(
+                f"Customer {item['customer_id']}: "
+                f"${item['total_amount']:,.0f} suppressed "
+                f"(score: {item['max_risk_score']})"
+            )
         
         logger.info(
             "risk_analysis_completed",

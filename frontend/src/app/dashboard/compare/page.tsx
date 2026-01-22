@@ -28,7 +28,8 @@ import {
     ChevronDown,
     ArrowRight,
     Search,
-    AlertCircle
+    AlertCircle,
+    Download
 } from 'lucide-react';
 import { formatDateIST } from '@/lib/date-utils';
 import {
@@ -716,13 +717,26 @@ function ComparisonPageContent() {
 
             {/* Granular Diff Table */}
             <div className="bg-white rounded-xl shadow-sm border border-slate-200">
-                <div className="p-6 border-b border-slate-200">
-                    <h2 className="text-xl font-bold text-slate-900">
-                        Impact Analysis Details
-                    </h2>
-                    <p className="text-sm text-slate-600 mt-1">
-                        Specific customers/cases where Rule B produced different results than Rule A
-                    </p>
+                <div className="p-6 border-b border-slate-200 flex justify-between items-center">
+                    <div>
+                        <h2 className="text-xl font-bold text-slate-900">
+                            Impact Analysis Details
+                        </h2>
+                        <p className="text-sm text-slate-600 mt-1">
+                            Specific customers/cases where Rule B produced different results than Rule A
+                        </p>
+                    </div>
+                    <Button
+                        variant="outlined"
+                        startIcon={<Download size={16} />}
+                        onClick={() => {
+                            const url = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/comparison/export?baseline_run_id=${baselineId}&refined_run_id=${refinedId}`;
+                            window.open(url, '_blank');
+                        }}
+                        className="normal-case border-slate-300 text-slate-700 hover:bg-slate-50"
+                    >
+                        Export CSV
+                    </Button>
                 </div>
 
                 <div className="overflow-x-auto">

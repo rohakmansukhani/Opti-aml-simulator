@@ -16,6 +16,7 @@ interface BuilderState {
     reset: () => void;
     schema: any; // Using any for prototype, ideally typed
     fetchSchema: () => Promise<void>;
+    fetchFieldValues: (field: string, search: string) => Promise<string[]>;
 }
 
 const INITIAL_CONFIG: Partial<ScenarioConfig> = {
@@ -75,5 +76,23 @@ export const useBuilderStore = create<BuilderState>((set) => ({
         } catch (e) {
             console.error("Failed to fetch schema", e);
         }
+    },
+
+    // Autocomplete Logic
+    fetchFieldValues: async (field: string, search: string) => {
+        try {
+            const { api } = await import('@/lib/api');
+            const res = await api.get('/api/data/values', {
+                params: { field, search }
+            });
+            if (res.status === 200 && Array.isArray(res.data.values)) {
+                return res.data.values;
+            }
+            return [];
+        } catch (e) {
+            console.error("Failed to fetch values", e);
+            return [];
+        }
     }
 }));
+

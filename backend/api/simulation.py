@@ -35,53 +35,103 @@ class RunRequest(BaseModel):
 @router.post("/check-schema")
 async def check_schema(
     request: RunRequest,
-    db: Session = Depends(get_db)
+    db: Session = Depends(get_db),
+    user_data: dict = Depends(get_current_user)
 ):
     """
     Validates if the current DB has all columns required by the selected scenarios.
     Returns list of missing fields.
     """
-    from models import ScenarioConfig, Transaction, Customer
+    from models import ScenarioConfig, Transaction, Customer, DataUpload
     from sqlalchemy import inspect
+    
+    user_id = user_data.get("sub")
     
     # 1. Collect all required fields from scenarios
     required_fields = set()
     
-    scenarios = db.query(ScenarioConfig).filter(ScenarioConfig.scenario_id.in_(request.scenarios)).all()
+    scenarios = db.query(ScenarioConfig).filter(
+        ScenarioConfig.scenario_id.in_(request.scenarios)
+    ).all()
     
     for sc in scenarios:
         config = sc.config_json
-        if not config: continue
+        if not config:
+            continue
         
         # Filters
         if 'filters' in config:
             for f in config['filters']:
-                if 'field' in f: required_fields.add(f['field'])
+                if 'field' in f:
+                    required_fields.add(f['field'])
                 
         # Aggregation
         if 'aggregation' in config and 'field' in config['aggregation']:
             required_fields.add(config['aggregation']['field'])
+        
+        # Aggregation group_by
+        if 'aggregation' in config and 'group_by' in config['aggregation']:
+            group_by = config['aggregation']['group_by']
+            if isinstance(group_by, list):
+                required_fields.update(group_by)
+            elif isinstance(group_by, str):
+                required_fields.add(group_by)
             
         # Threshold (Field based)
-        if 'threshold' in config and 'field_based' in config['threshold']:
-             required_fields.add(config['threshold']['field_based'].get('reference_field'))
+        if 'threshold' in config:
+            if 'field_based' in config['threshold']:
+                ref_field = config['threshold']['field_based'].get('reference_field')
+                if ref_field:
+                    required_fields.add(ref_field)
+            
+            # Segment-based threshold
+            if 'segment_based' in config['threshold']:
+                segment_field = config['threshold']['segment_based'].get('segment_field')
+                if segment_field:
+                    required_fields.add(segment_field)
 
-    # 2. Collect available columns from key tables
-    inspector = inspect(db.bind)
+    # 2. Get available columns from BOTH physical columns AND raw_data
     available_columns = set()
     
+    # Add physical columns from inspector
+    inspector = inspect(db.bind)
     for table in [Transaction, Customer]:
         for col in inspector.get_columns(table.__tablename__):
             available_columns.add(col['name'])
-            
-    # 3. Determine missing
-    # Remove 'virtual' or ignored fields if any
-    missing = [f for f in required_fields if f not in available_columns]
+    
+    # Extract fields from raw_data JSONB (same logic as /schema endpoint)
+    latest_upload = db.query(DataUpload).filter(
+        DataUpload.user_id == user_id
+    ).order_by(DataUpload.upload_timestamp.desc()).first()
+    
+    if latest_upload:
+        # Get sample transaction to inspect raw_data keys
+        sample_txn = db.query(Transaction).filter(
+            Transaction.upload_id == latest_upload.upload_id
+        ).first()
+        
+        if sample_txn and sample_txn.raw_data:
+            # Add all keys from raw_data JSONB
+            for field_name in sample_txn.raw_data.keys():
+                available_columns.add(field_name)
+        
+        # Get sample customer to inspect raw_data keys
+        sample_cust = db.query(Customer).filter(
+            Customer.upload_id == latest_upload.upload_id
+        ).first()
+        
+        if sample_cust and sample_cust.raw_data:
+            # Add all keys from customer raw_data
+            for field_name in sample_cust.raw_data.keys():
+                available_columns.add(field_name)
+    
+    # 3. Determine missing fields
+    missing = [f for f in required_fields if f and f not in available_columns]
     
     return {
         "status": "ok" if not missing else "missing_fields",
         "missing_fields": missing,
-        "available_columns": list(available_columns)
+        "available_columns": sorted(list(available_columns))
     }
 
 @router.post("/run")
@@ -239,6 +289,10 @@ async def export_run_results(
     if 'trigger_details' in df.columns:
         df['trigger_details'] = df['trigger_details'].astype(str)
         
+    # Remove timezones from all datetime columns
+    for col in df.select_dtypes(include=['datetime64[ns, UTC]', 'datetime64[ns]', 'datetime']).columns:
+        df[col] = df[col].dt.tz_localize(None)
+        
     # Generate Excel in memory
     output = io.BytesIO()
     # Ensure openpyxl is installed. If not, fallback to CSV could be considered, but user asked for Excel.
@@ -294,20 +348,33 @@ async def preview_scenario(
             "field_mappings": payload.get('field_mappings') # Pass mappings if any
         }
         
-        # Get customer list for this user (via DataUpload join)
-        customers = db.query(Customer.customer_id).join(
-            DataUpload, Customer.upload_id == DataUpload.upload_id
-        ).filter(
-            DataUpload.user_id == user_id,
+        # Get customer list for this user
+        # 1. Try active upload first
+        customers = db.query(Customer.customer_id).filter(
             Customer.upload_id == active_upload.upload_id
         ).distinct().all()
+        
+        # 2. Fallback: If no customers in active upload (e.g. it was transactions only),
+        # Find the most recent upload that has customers
+        if not customers:
+            recent_cust_upload = db.query(DataUpload).filter(
+                DataUpload.user_id == user_id,
+                DataUpload.record_count_customers > 0,
+                DataUpload.status == 'active'
+            ).order_by(DataUpload.upload_timestamp.desc()).first()
+            
+            if recent_cust_upload:
+                print(f"[PREVIEW] Fallback: Using customers from upload {recent_cust_upload.upload_id}")
+                customers = db.query(Customer.customer_id).filter(
+                    Customer.upload_id == recent_cust_upload.upload_id
+                ).distinct().all()
         
         customer_ids = [c[0] for c in customers]
         
         if not customer_ids:
             return {
                 "status": "no_data",
-                "message": "No customers found in active upload"
+                "message": "No customers found in active upload or recent history"
             }
         
         # Run simulation in preview mode (dry run, no DB writes)

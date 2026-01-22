@@ -7,15 +7,16 @@ import { api } from '@/lib/api';
 // import debounce from 'lodash/debounce'; // Removed to avoid dependency issues
 
 export default function FilterConfigStep() {
-    const { config, updateNestedConfig, schema } = useBuilderStore();
+    const { config, updateNestedConfig, schema, fetchFieldValues } = useBuilderStore();
     const filters = config.config_json?.filters || [];
 
     const [validating, setValidating] = useState(false);
     const [validationResult, setValidationResult] = useState<{
-        match_count: number;
-        match_count_customers?: number;
-        total_records: number;
-        status: string;
+        matched_transactions: number;
+        matched_customers?: number;
+        total_transactions: number;
+        match_percentage: number;
+        status?: string;
     } | null>(null);
     const [error, setError] = useState<string | null>(null);
 
@@ -34,11 +35,8 @@ export default function FilterConfigStep() {
         // Set new timeout
         debounceRef[index] = setTimeout(async () => {
             try {
-                const { data } = await api.get('/api/data/values', {
-                    params: { field, search }
-                });
-                console.log(`[Autocomplete] Fetched ${data.values?.length} values for index ${index}:`, data.values);
-                setOptionsMap(prev => ({ ...prev, [index]: data.values || [] }));
+                const values = await fetchFieldValues(field, search);
+                setOptionsMap(prev => ({ ...prev, [index]: values }));
             } catch (e) {
                 console.error("Failed to fetch values", e);
             }
@@ -68,11 +66,40 @@ export default function FilterConfigStep() {
         setValidating(true);
         setError(null);
         setValidationResult(null);
+
         try {
-            const { data } = await api.post('/api/validation/filters', filters);
+            // Updated to wrap in 'filters' object as required by backend
+            const { data } = await api.post('/api/validation/filters', {
+                filters: filters
+            });
             setValidationResult(data);
         } catch (err: any) {
-            setError(err.response?.data?.detail || "Validation failed");
+            console.error("Validation Request Failed:", err);
+
+            // Extract meaningful error message
+            let errorMessage = "Validation failed";
+
+            if (err.response) {
+                // Backend returned an error response
+                const responseData = err.response.data;
+
+                if (typeof responseData === 'string') {
+                    errorMessage = responseData;
+                } else if (responseData.detail) {
+                    errorMessage = typeof responseData.detail === 'string'
+                        ? responseData.detail
+                        : JSON.stringify(responseData.detail);
+                } else if (responseData.message) {
+                    errorMessage = responseData.message;
+                } else {
+                    errorMessage = JSON.stringify(responseData);
+                }
+            } else if (err.message) {
+                // Network or other error
+                errorMessage = err.message;
+            }
+
+            setError(errorMessage);
         } finally {
             setValidating(false);
         }
@@ -240,18 +267,18 @@ export default function FilterConfigStep() {
 
             {validationResult && (
                 <Alert
-                    severity={validationResult.match_count > 0 ? "success" : "warning"}
-                    icon={validationResult.match_count > 0 ? <CheckCircle /> : <AlertTriangle />}
+                    severity={validationResult.matched_transactions > 0 ? "success" : "warning"}
+                    icon={validationResult.matched_transactions > 0 ? <CheckCircle /> : <AlertTriangle />}
                     className="border border-opacity-20"
                 >
                     <div className="font-semibold">
-                        {validationResult.match_count} transactions found
+                        {validationResult.matched_transactions} transactions found
                     </div>
                     <div className="text-xs opacity-90">
-                        {validationResult.match_count_customers !== undefined && (
-                            <span className="font-medium">from {validationResult.match_count_customers} distinct customers </span>
+                        {validationResult.matched_customers !== undefined && (
+                            <span className="font-medium">from {validationResult.matched_customers} distinct customers </span>
                         )}
-                        (out of {validationResult.total_records} total transactions)
+                        (out of {validationResult.total_transactions} total transactions)
                     </div>
                 </Alert>
             )}
