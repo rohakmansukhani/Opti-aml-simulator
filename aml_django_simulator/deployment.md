@@ -49,15 +49,28 @@ Wait 2-3 minutes for the database to initialize. Your connection string will be:
 
 ---
 
-## Phase 3: Web App Deployment (Render/Azure)
+## Phase 3: Web App Deployment (Azure App Service)
 
-1.  **Source**: Connect your GitHub repository.
-2.  **Environment Variables**:
-    *   `ORACLE_DSN`: `(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=Your-VM-IP)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=XE)))`
-    *   `ORACLE_USER`: `system`
-    *   `ORACLE_PASSWORD`: `YourPassword`
-    *   `SECRET_KEY`: (Your secret)
-    *   `DEBUG`: `False`
+1.  **Create a Web App**: In the [Azure Portal](https://portal.azure.com/), create a "Web App".
+    *   **Publish**: GitHub (connect your project).
+    *   **Runtime stack**: Python 3.11 (Linux).
+    *   **App Service Plan**: Free F1 or Basic B1.
+2.  **Configuration (Environment Variables)**:
+    Under **Settings > Environment variables**, add these:
+
+| Name | Value |
+| :--- | :--- |
+| `DATABASE_URL` | `oracle://system:Optimoney123@74.243.219.76:1521/XE` |
+| `ORACLE_DSN` | `(DESCRIPTION=(ADDRESS=(PROTOCOL=TCP)(HOST=74.243.219.76)(PORT=1521))(CONNECT_DATA=(SERVER=DEDICATED)(SERVICE_NAME=XE)))` |
+| `ORACLE_USER` | `system` |
+| `ORACLE_PASSWORD` | `Optimoney123` |
+| `SECRET_KEY` | *(Any long random string)* |
+| `DEBUG` | `False` |
+| `DJANGO_SETTINGS_MODULE` | `config.settings` |
+
+3.  **Startup Command**:
+    Under **Settings > Configuration > General settings**, set the **Startup Command** to:
+    `gunicorn config.wsgi:application --bind 0.0.0.0:8000`
 
 ---
 
