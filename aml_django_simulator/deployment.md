@@ -53,7 +53,7 @@ Wait 2-3 minutes for the database to initialize. Your connection string will be:
 
 1.  **Create a Web App**: In the [Azure Portal](https://portal.azure.com/), create a "Web App".
     *   **Publish**: GitHub (connect your project).
-    *   **Runtime stack**: Python 3.11 (Linux).
+    *   **Runtime stack**: **Python 3.11 (Linux)**.
     *   **App Service Plan**: Free F1 or Basic B1.
 2.  **Configuration (Environment Variables)**:
     Under **Settings > Environment variables**, add these:
