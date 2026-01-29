@@ -1,8 +1,8 @@
 FROM python:3.11-slim
 
-# Install system dependencies for Oracle Thin mode + general ops
+# Install system dependencies
 RUN apt-get update && apt-get install -y \
-    libaio1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
