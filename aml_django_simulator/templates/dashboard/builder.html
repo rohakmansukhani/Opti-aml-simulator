@@ -1,0 +1,1345 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}Rule Builder - AML Simulator{% endblock %}
+
+{% block dashboard_content %}
+<div class="max-w-5xl mx-auto space-y-8 animate-in">
+    <!-- View 1: List View -->
+    <div id="scenario-list-view" class="animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <!-- Header -->
+        <div class="flex justify-between items-end mb-8">
+            <div>
+                <h1 class="text-3xl font-extrabold text-slate-900 tracking-tight">Scenario Architect</h1>
+                <p class="text-slate-500 mt-1 font-medium">Design and calibrate custom behavioral detection rules</p>
+            </div>
+            <div class="flex gap-3">
+                <button id="create-btn"
+                    class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-bold transition-all shadow-lg shadow-blue-100 flex items-center gap-2">
+                    <i data-lucide="plus" class="w-4 h-4"></i>
+                    New Scenario
+                </button>
+            </div>
+        </div>
+
+        <!-- Scenarios List -->
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6" id="scenarios-list">
+            <!-- Loaded via JS -->
+        </div>
+    </div>
+
+    <!-- View 2: Wizard View (Full Page) -->
+    <div id="scenario-wizard-view" class="hidden animate-in fade-in slide-in-from-right-8 duration-500 pb-20">
+        <div class="bg-white w-full rounded-[3rem] shadow-sm border border-slate-100 min-h-[600px] relative">
+            <div class="absolute top-8 right-8 z-10">
+                <button id="close-wizard"
+                    class="text-slate-400 hover:text-slate-800 font-bold text-xs uppercase tracking-widest flex items-center gap-2 px-4 py-2 hover:bg-slate-50 rounded-xl transition-colors">
+                    <i data-lucide="x" class="w-4 h-4"></i> Cancel
+                </button>
+            </div>
+
+            <div class="p-10 md:p-14">
+                <!-- Progress Header -->
+                <div class="flex items-center justify-between gap-2 mb-16 max-w-5xl mx-auto px-4">
+                    <div id="step-id-1" class="flex flex-col items-center gap-2 relative z-10 w-20">
+                        <div
+                            class="w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm ring-4 ring-blue-50 transition-all shadow-md">
+                            1</div>
+                        <span class="text-[10px] font-bold text-slate-900 tracking-wide uppercase">Details</span>
+                    </div>
+                    <div class="h-1 bg-slate-100 flex-1 rounded-full -mx-2 mb-6"></div>
+
+                    <div id="step-id-2" class="flex flex-col items-center gap-2 relative z-10 w-20 opacity-40">
+                        <div
+                            class="w-10 h-10 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-sm transition-all">
+                            2</div>
+                        <span class="text-[10px] font-bold text-slate-500 tracking-wide uppercase">Filters</span>
+                    </div>
+                    <div class="h-1 bg-slate-100 flex-1 rounded-full -mx-2 mb-6"></div>
+
+                    <div id="step-id-3" class="flex flex-col items-center gap-2 relative z-10 w-20 opacity-40">
+                        <div
+                            class="w-10 h-10 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-sm transition-all">
+                            3</div>
+                        <span class="text-[10px] font-bold text-slate-500 tracking-wide uppercase">Agg</span>
+                    </div>
+                    <div class="h-1 bg-slate-100 flex-1 rounded-full -mx-2 mb-6"></div>
+
+                    <div id="step-id-4" class="flex flex-col items-center gap-2 relative z-10 w-20 opacity-40">
+                        <div
+                            class="w-10 h-10 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-sm transition-all">
+                            4</div>
+                        <span class="text-[10px] font-bold text-slate-500 tracking-wide uppercase">Limits</span>
+                    </div>
+                    <div class="h-1 bg-slate-100 flex-1 rounded-full -mx-2 mb-6"></div>
+
+                    <div id="step-id-5" class="flex flex-col items-center gap-2 relative z-10 w-20 opacity-40">
+                        <div
+                            class="w-10 h-10 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-sm transition-all">
+                            5</div>
+                        <span class="text-[10px] font-bold text-slate-500 tracking-wide uppercase">Review</span>
+                    </div>
+                </div>
+
+                <div id="wizard-content" class="min-h-[400px] max-w-3xl mx-auto">
+                    <!-- Steps injected here -->
+                </div>
+
+                <div class="mt-12 pt-8 border-t border-slate-100 flex justify-between max-w-3xl mx-auto">
+                    <button id="prev-btn"
+                        class="hidden text-slate-500 hover:text-slate-900 font-black text-sm px-6 py-3 flex items-center gap-2">
+                        <i data-lucide="arrow-left" class="w-4 h-4"></i> Back
+                    </button>
+                    <button id="next-btn"
+                        class="ml-auto bg-slate-900 hover:bg-slate-800 text-white px-10 py-4 rounded-2xl font-bold transition-all shadow-xl shadow-slate-200 flex items-center gap-2">
+                        Next Step <i data-lucide="arrow-right" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let scenarios = [];
+    let currentStep = 1;
+    let newScenario = {
+        scenario_name: '',
+        description: '',
+        priority: 'MEDIUM',  // CRITICAL, HIGH, MEDIUM, LOW
+        is_active: true,
+        config: {
+            filters: [],
+            aggregation: {
+                field: 'transaction_amount',
+                function: 'sum',
+                rolling_window_days: 30,
+                group_by: 'customer_id',
+                count_threshold: {
+                    enabled: false,
+                    min_transactions: 3
+                }
+            },
+            threshold: {
+                type: 'fixed',  // 'fixed', 'dynamic', 'segment'
+                fixed_value: 10000,
+                // Dynamic threshold fields
+                dynamic: {
+                    reference_field: '',
+                    formula: 'reference_field * 0.5',
+                    fallback_value: 50000,
+                    min_threshold: null,
+                    max_threshold: null
+                },
+                // Segment-based threshold fields
+                segment: {
+                    field: '',
+                    values: []
+                }
+            }
+        }
+    };
+
+    // Rolling window update helper
+    window.updateRollingWindow = function (val) {
+        val = Math.min(90, Math.max(1, parseInt(val) || 30));
+        newScenario.config.aggregation.rolling_window_days = val;
+
+        const slider = document.getElementById('rolling-window-slider');
+        const input = document.getElementById('rolling-window-input');
+        const display = document.getElementById('rolling-window-display');
+
+        if (slider) slider.value = val;
+        if (input) input.value = val;
+        if (display) display.textContent = val;
+    }
+
+    // Threshold type change handler
+    window.changeThresholdType = function (type) {
+        newScenario.config.threshold.type = type;
+        renderStep();
+    }
+
+    // Dynamic threshold helpers
+    window.updateDynamicField = function (field) {
+        newScenario.config.threshold.dynamic.reference_field = field;
+        updateFormulaExample();
+    }
+
+    window.updateDynamicFormula = function (formula) {
+        newScenario.config.threshold.dynamic.formula = formula;
+        updateFormulaExample();
+    }
+
+    function updateFormulaExample() {
+        const exampleEl = document.getElementById('formula-example');
+        if (!exampleEl) return;
+
+        const field = newScenario.config.threshold.dynamic.reference_field;
+        const formula = newScenario.config.threshold.dynamic.formula;
+
+        if (field && formula) {
+            // Get a sample value from customers for this field
+            const sampleValue = 8000; // Default example
+            try {
+                const calculatedFormula = formula.replace(/reference_field/g, sampleValue);
+                const result = eval(calculatedFormula);
+                exampleEl.innerHTML = `If <code class="bg-slate-100 px-1 rounded">${field}</code> = ${sampleValue}, then threshold = <span class="text-emerald-600 font-bold">${result.toFixed(2)}</span>`;
+            } catch (e) {
+                exampleEl.innerHTML = '<span class="text-red-500">Invalid formula</span>';
+            }
+        } else {
+            exampleEl.innerHTML = 'Select a reference field and enter a formula';
+        }
+    }
+
+    // Segment threshold helpers
+    window.updateSegmentField = function (field) {
+        newScenario.config.threshold.segment.field = field;
+        // Clear existing segments when field changes
+        newScenario.config.threshold.segment.values = [];
+        renderSegments();
+    }
+
+    window.addSegment = function () {
+        newScenario.config.threshold.segment.values.push({ segment: '', threshold: 5000 });
+        renderSegments();
+    }
+
+    window.removeSegment = function (index) {
+        newScenario.config.threshold.segment.values.splice(index, 1);
+        renderSegments();
+    }
+
+    window.updateSegment = function (index, key, value) {
+        if (key === 'threshold') value = parseFloat(value) || 0;
+        newScenario.config.threshold.segment.values[index][key] = value;
+    }
+
+    function renderSegments() {
+        const container = document.getElementById('segment-rows');
+        if (!container) return;
+
+        if (newScenario.config.threshold.segment.values.length === 0) {
+            container.innerHTML = '<p class="text-xs text-slate-400 italic">Click "Add Segment" to define segment-specific thresholds</p>';
+            return;
+        }
+
+        container.innerHTML = newScenario.config.threshold.segment.values.map((s, i) => `
+            <div class="grid grid-cols-12 gap-3 items-center">
+                <div class="col-span-5 relative">
+                    <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1 block">Segment</label>
+                    <input type="text" id="segment-input-${i}" value="${s.segment}"
+                        oninput="handleSegmentInput(${i}, this.value)"
+                        onfocus="handleSegmentInput(${i}, this.value)"
+                        onblur="setTimeout(() => hideSegmentSuggestions(${i}), 200)"
+                        placeholder="Type to search..."
+                        autocomplete="off"
+                        class="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:ring-2 focus:ring-purple-500">
+                    <div id="segment-suggestions-${i}" class="hidden absolute top-full left-0 w-full mt-1 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 max-h-48 overflow-y-auto"></div>
+                </div>
+                <div class="col-span-5">
+                    <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wide mb-1 block">Threshold</label>
+                    <input type="number" value="${s.threshold}" onchange="updateSegment(${i}, 'threshold', this.value)"
+                        class="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-bold text-slate-700 outline-none focus:ring-2 focus:ring-purple-500">
+                </div>
+                <div class="col-span-2 pt-5">
+                    <button onclick="removeSegment(${i})" class="text-slate-400 hover:text-red-500 transition-colors p-2">
+                        <i data-lucide="trash-2" class="w-4 h-4"></i>
+                    </button>
+                </div>
+            </div>
+        `).join('');
+        lucide.createIcons();
+    }
+
+    // Segment autocomplete handlers
+    let segmentDebounceTimer;
+    window.handleSegmentInput = function (index, value) {
+        newScenario.config.threshold.segment.values[index].segment = value;
+
+        const field = newScenario.config.threshold.segment.field;
+        if (!field) return;
+
+        clearTimeout(segmentDebounceTimer);
+        segmentDebounceTimer = setTimeout(async () => {
+            const suggestions = document.getElementById(`segment-suggestions-${index}`);
+            if (!suggestions) return;
+
+            if (value.trim().length < 1) {
+                // Show all values when focused with empty input
+                suggestions.innerHTML = '<div class="p-3 text-xs text-slate-400 font-medium">Loading...</div>';
+                suggestions.classList.remove('hidden');
+            }
+
+            const values = await fetchFieldValues(field, value);
+
+            if (values.length === 0) {
+                suggestions.innerHTML = '<div class="p-3 text-xs text-slate-400 font-medium">No matches found</div>';
+            } else {
+                suggestions.innerHTML = values.map(v => `
+                    <div onmousedown="selectSegmentValue(${index}, '${v.replace(/'/g, "\\'")}')"
+                        class="px-4 py-2.5 hover:bg-purple-50 cursor-pointer text-xs font-bold text-slate-700 border-b border-slate-50 last:border-0 truncate transition-colors">
+                        ${v}
+                    </div>
+                `).join('');
+            }
+            suggestions.classList.remove('hidden');
+        }, 200);
+    }
+
+    window.selectSegmentValue = function (index, value) {
+        newScenario.config.threshold.segment.values[index].segment = value;
+        const input = document.getElementById(`segment-input-${index}`);
+        if (input) input.value = value;
+        hideSegmentSuggestions(index);
+    }
+
+    window.hideSegmentSuggestions = function (index) {
+        const suggestions = document.getElementById(`segment-suggestions-${index}`);
+        if (suggestions) suggestions.classList.add('hidden');
+    }
+
+    // --- Data Fetching ---
+    let schema = { transactions: [], customers: [] };
+
+    async function fetchScenarios() {
+        try {
+            const res = await fetch('/api/rules/scenarios/');
+            scenarios = await res.json();
+            renderList();
+        } catch (e) { }
+    }
+
+    async function fetchSchema() {
+        try {
+            const res = await fetch('/api/rules/fields/');
+            schema = await res.json();
+        } catch (e) { console.error("Failed to fetch schema", e); }
+    }
+
+    async function fetchFieldValues(field, search) {
+        try {
+            const res = await fetch(`/api/rules/values/?field=${field}&search=${search}`);
+            return await res.json();
+        } catch (e) { return []; }
+    }
+
+    // --- UI Rendering ---
+    function renderList() {
+        const list = document.getElementById('scenarios-list');
+        list.innerHTML = scenarios.map(s => `
+            <div class="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm hover:shadow-xl hover:-translate-y-1 transition-all group overflow-visible">
+                <div class="flex justify-between items-start mb-4 relative">
+                    <div class="w-12 h-12 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center group-hover:bg-blue-600 group-hover:text-white transition-colors">
+                        <i data-lucide="zap" class="w-6 h-6"></i>
+                    </div>
+                    
+                    <div class="relative">
+                        <button onclick="toggleCardMenu('${s.scenario_id}')" class="p-2 text-slate-300 hover:text-slate-600 transition-colors">
+                            <i data-lucide="more-vertical" class="w-5 h-5"></i>
+                        </button>
+                        
+                        <!-- Dropdown Menu -->
+                        <div id="menu-${s.scenario_id}" class="hidden absolute right-0 top-full mt-2 w-48 bg-white rounded-2xl shadow-2xl border border-slate-100 z-50 py-2">
+                            <button onclick="deleteScenario('${s.scenario_id}')" class="w-full text-left px-4 py-2 text-xs font-bold text-red-600 hover:bg-red-50 flex items-center gap-2">
+                                <i data-lucide="trash-2" class="w-4 h-4"></i> Delete Scenario
+                            </button>
+                        </div>
+                    </div>
+                </div>
+                <h3 class="text-lg font-black text-slate-900 mb-1">${s.scenario_name}</h3>
+                <p class="text-xs text-slate-500 font-medium leading-relaxed mb-6">${s.description || 'Custom calibrated behavioral profile active in system.'}</p>
+                <div class="flex items-center justify-between">
+                    <span class="px-3 py-1 bg-slate-50 text-slate-500 text-[10px] font-black uppercase tracking-widest rounded-lg border border-slate-100">
+                        ${s.enabled ? 'Active' : 'Draft'}
+                    </span>
+                    <button onclick="editScenario('${s.scenario_id}')" class="text-blue-600 hover:text-blue-700 text-xs font-black uppercase tracking-widest">Edit Scenario</button>
+                </div>
+            </div>
+        `).join('');
+        lucide.createIcons();
+    }
+
+    window.toggleCardMenu = function (id) {
+        // Hide all other menus first
+        document.querySelectorAll('[id^="menu-"]').forEach(el => {
+            if (el.id !== `menu-${id}`) el.classList.add('hidden');
+        });
+
+        const menu = document.getElementById(`menu-${id}`);
+        if (menu) menu.classList.toggle('hidden');
+
+        // Close on click outside
+        const closeOnOutside = (e) => {
+            if (!menu.contains(e.target) && !e.target.closest('button')) {
+                menu.classList.add('hidden');
+                document.removeEventListener('click', closeOnOutside);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closeOnOutside), 10);
+    }
+
+    window.deleteScenario = async function (id) {
+        if (!confirm('Are you sure you want to delete this scenario? This action cannot be undone.')) return;
+
+        try {
+            const csrftoken = getCookie('csrftoken');
+            const res = await fetch(`/api/rules/scenarios/${id}`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRFToken': csrftoken
+                }
+            });
+
+            if (res.ok || res.status === 404) {
+                fetchScenarios(); // Refresh the list
+            } else {
+                alert('Failed to delete scenario');
+            }
+        } catch (e) {
+            console.error('Delete failed', e);
+            alert('Error deleting scenario');
+        }
+    }
+
+    window.editScenario = function (id) {
+        const scenario = scenarios.find(s => s.scenario_id === id);
+        if (!scenario) return;
+
+        // Populate state
+        currentStep = 1;
+        newScenario = {
+            scenario_id: scenario.scenario_id,
+            scenario_name: scenario.scenario_name,
+            description: scenario.description,
+            priority: scenario.priority || 'MEDIUM',
+            is_active: scenario.is_active,
+            config: scenario.config || {
+                filters: [],
+                aggregation: {
+                    field: 'transaction_amount',
+                    function: 'sum',
+                    rolling_window_days: 30,
+                    group_by: 'customer_id',
+                    count_threshold: { enabled: false, min_transactions: 3 }
+                },
+                threshold: {
+                    type: 'fixed',
+                    fixed_value: 10000,
+                    dynamic: { reference_field: '', formula: 'reference_field * 0.5', fallback_value: 50000, min_threshold: null, max_threshold: null },
+                    segment: { field: '', values: [] }
+                }
+            }
+        };
+
+        // Switch Views
+        document.getElementById('scenario-list-view').classList.add('hidden');
+        document.getElementById('scenario-wizard-view').classList.remove('hidden');
+
+        renderStep();
+    }
+
+    // --- Wizard Logic ---
+
+    // Helper: format value for 'in' operator display
+    function getChips(val) {
+        if (!val) return [];
+        return val.split(',').map(s => s.trim()).filter(s => s);
+    }
+
+    // Step 2: Dynamic Filter Rendering
+    function renderFilters() {
+        const container = document.getElementById('filter-rows');
+        if (newScenario.config.filters.length === 0) {
+            container.innerHTML = `<div class="text-center p-8 border-2 border-dashed border-slate-200 rounded-xl text-slate-400 bg-slate-50/50 text-sm">No filters defined. All transactions will be processed.</div>`;
+            return;
+        }
+
+        container.innerHTML = newScenario.config.filters.map((f, i) => {
+            const isMulti = f.operator === 'in';
+
+            let currentInput = '';
+            let validChips = [];
+            if (isMulti) {
+                const rawParts = f.value ? f.value.split(',') : [];
+                if (rawParts.length > 0) {
+                    currentInput = rawParts[rawParts.length - 1]; // Keep spaces? yes.
+                    validChips = rawParts.slice(0, -1).map(s => s.trim()).filter(s => s);
+                }
+            }
+
+            return `
+            <div class="grid grid-cols-12 gap-2 p-3 bg-slate-50 rounded-2xl border border-slate-200 items-start">
+                <div class="col-span-4">
+                     <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Field</label>
+                    <select onchange="updateFilter(${i}, 'field', this.value)" class="w-full bg-white border-0 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 outline-none shadow-sm">
+                        <option value="" disabled ${!f.field ? 'selected' : ''}>Select Field</option>
+                        <optgroup label="Transaction Data">
+                            ${schema.transactions.map(field => `<option value="${field}" ${f.field === field ? 'selected' : ''}>${field}</option>`).join('')}
+                        </optgroup>
+                        <optgroup label="Customer Data">
+                            ${schema.customers.map(field => `<option value="${field}" ${f.field === field ? 'selected' : ''}>${field}</option>`).join('')}
+                        </optgroup>
+                    </select>
+                </div>
+                <div class="col-span-3">
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Operator</label>
+                    <select onchange="updateFilter(${i}, 'operator', this.value)" class="w-full bg-white border-0 rounded-xl px-3 py-2 text-xs font-bold text-slate-700 outline-none shadow-sm">
+                        <option value="==" ${f.operator === '==' ? 'selected' : ''}>Equals</option>
+                        <option value="!=" ${f.operator === '!=' ? 'selected' : ''}>Not Equals</option>
+                        <option value=">" ${f.operator === '>' ? 'selected' : ''}>Greater</option>
+                        <option value="<" ${f.operator === '<' ? 'selected' : ''}>Less</option>
+                        <option value="in" ${f.operator === 'in' ? 'selected' : ''}>In List</option>
+                    </select>
+                </div>
+                <div class="col-span-4 relative group">
+                    <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1 mb-1 block">Value ${f.operator === 'in' ? '(Multi-select)' : ''}</label>
+                    <div class="w-full bg-white border-0 rounded-xl px-2 py-1.5 text-xs font-bold text-slate-700 shadow-sm flex flex-wrap items-center gap-1.5 min-h-[36px]">
+                        ${isMulti ? validChips.map((c, cIdx) => `
+                            <span class="inline-flex items-center gap-1 px-2 py-1 rounded-lg bg-slate-100 text-slate-600 border border-slate-200">
+                                ${c}
+                                <button onclick="removeChip(${i}, ${cIdx})" class="hover:text-red-500"><i data-lucide="x" class="w-3 h-3"></i></button>
+                            </span>
+                        `).join('') : ''}
+                        
+                        <input type="text" 
+                            id="input-${i}"
+                            value="${isMulti ? currentInput : f.value}" 
+                            oninput="handleValueInput(${i}, this.value, ${isMulti})"
+                            onfocus="handleValueInput(${i}, this.value, ${isMulti})"
+                            placeholder="${isMulti && validChips.length > 0 ? '' : (f.operator === 'in' ? 'Type & select...' : 'Type to search...')}" 
+                            class="bg-transparent border-0 outline-none flex-1 min-w-[60px] h-full placeholder:font-normal placeholder:text-slate-400"
+                        >
+                    </div>
+                    
+                    <!-- Autocomplete Dropdown -->
+                    <div id="suggestions-${i}" class="hidden absolute top-full left-0 w-full mt-1 bg-white rounded-xl shadow-2xl border border-slate-100 z-50 max-h-60 overflow-y-auto overflow-x-hidden custom-scrollbar"></div>
+                </div>
+                <div class="col-span-1 pt-6 text-center">
+                    <button onclick="removeFilter(${i})" class="text-red-400 hover:text-red-600 transition-colors"><i data-lucide="trash-2" class="w-4 h-4"></i></button>
+                </div>
+            </div>
+            `;
+        }).join('');
+        lucide.createIcons();
+
+        // Restore focus if needed? (optional polish)
+    }
+
+    window.addFilter = function () {
+        newScenario.config.filters.push({ field: '', operator: '==', value: '' });
+        renderFilters();
+    }
+
+    window.removeFilter = function (index) {
+        newScenario.config.filters.splice(index, 1);
+        renderFilters();
+    }
+
+    window.updateFilter = function (index, key, val) {
+        newScenario.config.filters[index][key] = val;
+        renderFilters();
+    }
+
+    // New helper to remove a specific chip
+    window.removeChip = function (filterIndex, chipIndex) {
+        let current = newScenario.config.filters[filterIndex].value || '';
+        let parts = current.split(','); // Raw split
+
+        // Remove the item at chipIndex
+        // Note: validChips corresponds to parts.slice(0, -1). 
+        // So chipIndex 0 maps to parts[0], etc.
+        parts.splice(chipIndex, 1);
+
+        newScenario.config.filters[filterIndex].value = parts.join(',');
+        renderFilters();
+    }
+
+    // Autocomplete Handler
+    let debounceTimer;
+    window.handleValueInput = function (index, val, isMulti) {
+        if (!isMulti) {
+            newScenario.config.filters[index].value = val;
+        } else {
+            // For multi, we need to reconstruct the full string
+            // We kept the "validChips" (previous parts) in the UI but not fully in state separately here.
+            // But we can retrieve the *previous* state? 
+            // EASIER: Read the current full state, and update the *last part*.
+            let currentFull = newScenario.config.filters[index].value || '';
+            let rawParts = currentFull.split(',');
+            // Update the last part with the new input 'val'
+            if (rawParts.length > 0) {
+                rawParts[rawParts.length - 1] = val;
+            } else {
+                rawParts = [val];
+            }
+            newScenario.config.filters[index].value = rawParts.join(',');
+        }
+
+        const field = newScenario.config.filters[index].field;
+        const op = newScenario.config.filters[index].operator;
+
+        if (!field) return;
+
+        let searchTerm = val;
+        // In Multi mode, 'val' IS the search term because the input box only holds the last part
+
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(async () => {
+            const suggestions = document.getElementById(`suggestions-${index}`);
+            if (searchTerm.trim().length < 1) {
+                suggestions.classList.add('hidden');
+                return;
+            }
+
+            suggestions.innerHTML = '<div class="p-3 text-xs text-slate-400 font-medium">Loading...</div>';
+            suggestions.classList.remove('hidden');
+
+            const values = await fetchFieldValues(field, searchTerm);
+
+            if (values.length === 0) {
+                suggestions.innerHTML = '<div class="p-3 text-xs text-slate-400 font-medium">No matches found</div>';
+            } else {
+                suggestions.innerHTML = values.map(v => `
+                    <div onclick="selectSuggestion(${index}, '${v}')" class="px-4 py-2.5 hover:bg-blue-50 cursor-pointer text-xs font-bold text-slate-700 border-b border-slate-50 last:border-0 truncate transition-colors">
+                        ${v}
+                    </div>
+                `).join('');
+            }
+        }, 300);
+    }
+
+    window.selectSuggestion = function (index, val) {
+        const op = newScenario.config.filters[index].operator;
+
+        if (op === 'in') {
+            // Logic: Append the selected value + comma to the END of the list
+            // We need to replace the *current partial input* with the selected value
+            let current = newScenario.config.filters[index].value || '';
+            let lastCommaIdx = current.lastIndexOf(',');
+            let base = (lastCommaIdx !== -1) ? current.substring(0, lastCommaIdx + 1) : '';
+
+            // New full string: base + selectedVal + ", "
+            // The empty space after comma sets up the next input
+            newScenario.config.filters[index].value = base + val + ', ';
+        } else {
+            newScenario.config.filters[index].value = val;
+        }
+
+        renderFilters();
+
+        // Auto-focus the input again
+        setTimeout(() => {
+            const input = document.getElementById(`input-${index}`);
+            if (input) input.focus();
+        }, 50);
+    }
+
+    // CSRF Helper
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+
+    // Test Filters Logic
+    window.testFilters = async function () {
+        const resultSpan = document.getElementById('test-result');
+        const btn = document.querySelector('button[onclick="testFilters()"]');
+
+        // UI Loading State
+        btn.disabled = true;
+        btn.innerHTML = '<i data-lucide="loader-2" class="w-3 h-3 animate-spin"></i> Testing...';
+        resultSpan.classList.add('hidden');
+
+        try {
+            const payload = {
+                upload_id: null, // Backend will pick latest
+                filters: newScenario.config.filters
+            };
+
+            const csrftoken = getCookie('csrftoken');
+
+            const res = await fetch('/api/rules/validation/filters', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrftoken
+                },
+                body: JSON.stringify(payload)
+            });
+
+            if (res.status === 403) {
+                throw new Error("Permission Denied (CSRF)");
+            }
+
+            const data = await res.json();
+
+            resultSpan.classList.remove('hidden');
+            if (data.match_count !== undefined) {
+                resultSpan.innerHTML = `Matched <span class="text-blue-600">${data.match_count.toLocaleString()}</span> / ${data.total_records.toLocaleString()} records`;
+                btn.innerHTML = 'Test Logic';
+            } else {
+                resultSpan.innerHTML = '<span class="text-red-500">Error testing filters</span>';
+                btn.innerHTML = 'Retry';
+            }
+
+        } catch (e) {
+            console.error(e);
+            resultSpan.classList.remove('hidden');
+            resultSpan.innerHTML = '<span class="text-red-500">Network Error</span>';
+            btn.innerHTML = 'Retry';
+        } finally {
+            btn.disabled = false;
+            lucide.createIcons();
+        }
+    }
+
+    // Test Complete Scenario Logic
+    window.testScenario = async function () {
+        const btn = document.getElementById('test-scenario-btn');
+        const resultContainer = document.getElementById('scenario-test-result');
+        const resultCard = document.getElementById('test-result-card');
+        const header = document.getElementById('test-result-header');
+        const alertsList = document.getElementById('test-result-alerts');
+
+        // Loading State
+        btn.disabled = true;
+        btn.classList.add('opacity-50', 'pointer-events-none');
+        btn.innerHTML = `
+            <i data-lucide="loader-2" class="w-5 h-5 animate-spin"></i>
+            <span>Calculating Simulation Results...</span>
+        `;
+        resultContainer.classList.add('hidden');
+        lucide.createIcons();
+
+        try {
+            const payload = {
+                upload_id: null,
+                scenario_id: newScenario.scenario_id || null,
+                config_json: newScenario.config
+            };
+
+            const csrftoken = getCookie('csrftoken');
+            const res = await fetch('/api/rules/validation/scenario', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-CSRFToken': csrftoken
+                },
+                body: JSON.stringify(payload)
+            });
+
+            const data = await res.json();
+
+            resultContainer.classList.remove('hidden');
+            btn.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <i data-lucide="refresh-cw" class="w-5 h-5"></i>
+                    <span>Run Test Again</span>
+                </div>
+            `;
+            btn.disabled = false;
+            btn.classList.remove('opacity-50', 'pointer-events-none');
+
+            if (data.status === 'success') {
+                const count = data.alerts_generated;
+
+                // Update Header
+                resultCard.className = count > 0
+                    ? "bg-white border-blue-200 border-2 rounded-[2rem] overflow-hidden shadow-xl shadow-blue-50"
+                    : "bg-slate-50 border-slate-200 border rounded-[2rem] overflow-hidden";
+
+                header.innerHTML = `
+                    <div class="flex items-center gap-3">
+                        <div class="w-10 h-10 rounded-xl ${count > 0 ? 'bg-blue-600' : 'bg-slate-400'} flex items-center justify-center text-white">
+                            <i data-lucide="${count > 0 ? 'alert-octagon' : 'check-circle-2'}" class="w-6 h-6"></i>
+                        </div>
+                        <div>
+                            <div class="text-xs font-black text-slate-400 uppercase tracking-widest">Dry Run Result</div>
+                            <div class="text-lg font-black text-slate-900">${count} Alerts Generated</div>
+                        </div>
+                    </div>
+                `;
+
+                // Update Alert Sample
+                if (count > 0) {
+                    alertsList.innerHTML = `
+                        <div class="space-y-3">
+                            <p class="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-2 px-2">Sample Matches:</p>
+                            ${data.alerts.map(a => `
+                                <div class="p-3 bg-white border border-slate-100 rounded-xl flex items-center justify-between">
+                                    <div class="flex items-center gap-3">
+                                        <div class="w-8 h-8 rounded-full bg-slate-100 flex items-center justify-center text-[10px] font-black text-slate-600">ID</div>
+                                        <div>
+                                            <div class="text-xs font-bold text-slate-900">${a.customer_id}</div>
+                                            <div class="text-[10px] text-slate-500">${a.trigger_details.aggregated_value.toLocaleString()} matches ${a.trigger_details.aggregation_function}</div>
+                                        </div>
+                                    </div>
+                                    <div class="text-blue-600 font-black text-[10px] uppercase tracking-widest bg-blue-50 px-2 py-1 rounded-lg">Score: ${a.risk_score}</div>
+                                </div>
+                            `).join('')}
+                            ${count > 10 ? `<p class="text-center text-[10px] text-slate-400 font-bold py-2 italic border-t mt-2">... and ${count - 10} more matches</p>` : ''}
+                        </div>
+                    `;
+                } else {
+                    alertsList.innerHTML = `
+                        <div class="py-8 text-center">
+                            <p class="text-sm font-medium text-slate-500 leading-relaxed">Based on the current configuration, this scenario would not have generated any alerts on the latest dataset.</p>
+                        </div>
+                    `;
+                }
+            } else {
+                header.innerHTML = `<div class="text-red-600 font-bold p-4">Error: ${data.message}</div>`;
+                alertsList.innerHTML = '';
+            }
+            lucide.createIcons();
+
+        } catch (e) {
+            console.error(e);
+            alert('Simulation test failed. Check console for details.');
+            btn.innerHTML = `<span>Retry Test</span>`;
+            btn.disabled = false;
+            btn.classList.remove('opacity-50', 'pointer-events-none');
+        }
+    }
+
+
+    const steps = {
+        1: {
+            title: 'Scenario Details',
+            render: () => `
+                <div class="space-y-6">
+                    <div class="space-y-2">
+                        <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Scenario Name</label>
+                        <input type="text" id="wiz-name" value="${newScenario.scenario_name}" onchange="newScenario.scenario_name = this.value" class="w-full bg-slate-50 border border-slate-200 rounded-2xl px-6 py-4 font-bold text-lg text-slate-700 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="e.g. Rapid Fund Movement">
+                    </div>
+                    <div class="space-y-2">
+                        <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Description</label>
+                        <textarea id="wiz-desc" rows="3" onchange="newScenario.description = this.value" class="w-full bg-slate-50 border border-slate-200 rounded-2xl px-6 py-4 font-medium text-slate-600 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="Describe the behavior...">${newScenario.description}</textarea>
+                    </div>
+                    <div class="grid grid-cols-2 gap-6">
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Priority</label>
+                            <select onchange="newScenario.priority = this.value" class="w-full bg-slate-50 border border-slate-200 rounded-2xl px-6 py-4 font-bold text-slate-700 outline-none">
+                                <option value="CRITICAL" ${newScenario.priority === 'CRITICAL' ? 'selected' : ''}>🔴 Critical</option>
+                                <option value="HIGH" ${newScenario.priority === 'HIGH' ? 'selected' : ''}>🟠 High</option>
+                                <option value="MEDIUM" ${newScenario.priority === 'MEDIUM' ? 'selected' : ''}>🟡 Medium</option>
+                                <option value="LOW" ${newScenario.priority === 'LOW' ? 'selected' : ''}>🟢 Low</option>
+                            </select>
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest ml-1">Status</label>
+                            <div class="flex items-center gap-4 bg-slate-50 border border-slate-200 rounded-2xl px-6 py-4">
+                                <label class="relative inline-flex items-center cursor-pointer">
+                                    <input type="checkbox" ${newScenario.is_active ? 'checked' : ''} onchange="newScenario.is_active = this.checked" class="sr-only peer">
+                                    <div class="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-emerald-500"></div>
+                                </label>
+                                <span class="font-bold text-slate-700">${newScenario.is_active ? 'Active' : 'Inactive'}</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>`
+        },
+        2: {
+            title: 'Scope Filters',
+            render: () => `
+                <div class="space-y-6">
+                    <p class="text-slate-500 text-sm">Define transactions to include in this rule.</p>
+                    <div id="filter-rows" class="space-y-4"></div>
+                    
+                    <div class="flex items-center justify-between pt-2">
+                        <button onclick="addFilter()" class="text-blue-600 font-bold text-xs flex items-center gap-1 hover:underline">
+                            <i data-lucide="plus" class="w-3 h-3"></i> Add Filter Rule
+                        </button>
+                        
+                        <div class="flex items-center gap-4">
+                            <span id="test-result" class="text-xs font-bold text-slate-500 hidden"></span>
+                            <button onclick="testFilters()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-black uppercase tracking-widest transition-colors">
+                                Test Logic
+                            </button>
+                        </div>
+                    </div>
+
+                    ${setTimeout(renderFilters, 0) ? '' : ''} <!-- Hack to render after injection -->
+                </div>`
+        },
+        3: {
+            title: 'Aggregation',
+            render: () => `
+                <div class="space-y-6">
+                    <div class="grid grid-cols-2 gap-6">
+                         <div class="space-y-2">
+                            <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Function</label>
+                             <select onchange="newScenario.config.aggregation.function = this.value" class="w-full bg-slate-50 border border-slate-200 rounded-2xl px-6 py-4 font-bold text-slate-700 outline-none">
+                                <option value="sum" ${newScenario.config.aggregation.function === 'sum' ? 'selected' : ''}>SUM (Total)</option>
+                                <option value="count" ${newScenario.config.aggregation.function === 'count' ? 'selected' : ''}>COUNT (Frequency)</option>
+                                <option value="avg" ${newScenario.config.aggregation.function === 'avg' ? 'selected' : ''}>AVG (Average)</option>
+                                <option value="max" ${newScenario.config.aggregation.function === 'max' ? 'selected' : ''}>MAX (Largest)</option>
+                                <option value="min" ${newScenario.config.aggregation.function === 'min' ? 'selected' : ''}>MIN (Smallest)</option>
+                            </select>
+                        </div>
+                        <div class="space-y-2">
+                            <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Target Field</label>
+                             <select onchange="newScenario.config.aggregation.field = this.value" class="w-full bg-slate-50 border border-slate-200 rounded-2xl px-6 py-4 font-bold text-slate-700 outline-none">
+                                ${schema.transactions.map(field => `<option value="${field}" ${newScenario.config.aggregation.field === field ? 'selected' : ''}>${field}</option>`).join('')}
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="space-y-2">
+                        <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Rolling Window</label>
+                        <div class="flex items-center gap-4">
+                            <div class="relative flex-1">
+                                <input type="range" id="rolling-window-slider" min="1" max="90"
+                                    value="${newScenario.config.aggregation.rolling_window_days || 30}"
+                                    oninput="updateRollingWindow(this.value)"
+                                    class="w-full h-2 bg-slate-200 rounded-lg appearance-none cursor-pointer accent-blue-600">
+                                <div class="flex justify-between text-[10px] text-slate-400 mt-1">
+                                    <span>1 day</span>
+                                    <span>90 days</span>
+                                </div>
+                            </div>
+                            <div class="relative w-24">
+                                <input type="number" id="rolling-window-input" min="1" max="90"
+                                    value="${newScenario.config.aggregation.rolling_window_days || 30}"
+                                    onchange="updateRollingWindow(this.value)"
+                                    class="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 font-bold text-slate-700 outline-none text-center text-sm">
+                                <span class="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-slate-400 font-bold">days</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Count Threshold Section -->
+                    <div class="bg-amber-50 border border-amber-200 rounded-2xl p-5 space-y-4">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2 text-amber-700 font-bold text-sm">
+                                <i data-lucide="filter" class="w-4 h-4"></i>
+                                Minimum Transaction Count
+                            </div>
+                            <label class="relative inline-flex items-center cursor-pointer">
+                                <input type="checkbox" ${newScenario.config.aggregation.count_threshold.enabled ? 'checked' : ''}
+                                    onchange="newScenario.config.aggregation.count_threshold.enabled = this.checked; renderStep();"
+                                    class="sr-only peer">
+                                <div class="w-11 h-6 bg-slate-300 peer-focus:outline-none rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-amber-500"></div>
+                            </label>
+                        </div>
+                        ${newScenario.config.aggregation.count_threshold.enabled ? `
+                            <div class="space-y-2">
+                                <label class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Require at least</label>
+                                <div class="flex items-center gap-3">
+                                    <input type="number" min="1" max="100"
+                                        value="${newScenario.config.aggregation.count_threshold.min_transactions}"
+                                        onchange="newScenario.config.aggregation.count_threshold.min_transactions = parseInt(this.value)"
+                                        class="w-24 bg-white border border-amber-300 rounded-xl px-4 py-2 font-bold text-slate-700 outline-none text-center">
+                                    <span class="text-sm text-slate-600 font-medium">transactions to trigger alert</span>
+                                </div>
+                            </div>
+                        ` : `
+                            <p class="text-xs text-slate-500">Enable to require a minimum number of transactions before triggering an alert.</p>
+                        `}
+                    </div>
+
+                    <div class="space-y-2">
+                        <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest">Group By</label>
+                        <select onchange="newScenario.config.aggregation.group_by = this.value" class="w-full bg-slate-50 border border-slate-200 rounded-2xl px-6 py-4 font-bold text-slate-700 outline-none">
+                            <option value="customer_id" ${newScenario.config.aggregation.group_by === 'customer_id' ? 'selected' : ''}>Customer ID (Default)</option>
+                            <optgroup label="Transaction Data">
+                                ${schema.transactions.map(field => `<option value="${field}" ${newScenario.config.aggregation.group_by === field ? 'selected' : ''}>${field}</option>`).join('')}
+                            </optgroup>
+                            <optgroup label="Customer Data">
+                                ${schema.customers.map(field => `<option value="${field}" ${newScenario.config.aggregation.group_by === field ? 'selected' : ''}>${field}</option>`).join('')}
+                            </optgroup>
+                        </select>
+                        <p class="text-xs text-slate-500">Aggregate values will be grouped by this field.</p>
+                    </div>
+                </div>`
+        },
+        4: {
+            title: 'Thresholds',
+            render: () => {
+                const thresholdType = newScenario.config.threshold.type;
+
+                let typeSpecificUI = '';
+
+                if (thresholdType === 'fixed') {
+                    typeSpecificUI = `
+                        <div class="bg-slate-50 border border-slate-200 rounded-2xl p-6 space-y-4">
+                            <div class="flex items-center gap-2 text-blue-600 font-bold text-sm">
+                                <i data-lucide="hash" class="w-4 h-4"></i>
+                                Fixed Threshold Value
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Trigger Value (>=)</label>
+                                <div class="relative">
+                                    <span class="absolute left-4 top-1/2 -translate-y-1/2 font-bold text-slate-400">#</span>
+                                    <input type="number" value="${newScenario.config.threshold.fixed_value}"
+                                        onchange="newScenario.config.threshold.fixed_value = parseFloat(this.value)"
+                                        class="w-full bg-white border border-slate-200 rounded-xl pl-10 pr-4 py-3 font-bold text-lg text-slate-700 outline-none focus:ring-2 focus:ring-blue-500">
+                                </div>
+                            </div>
+                        </div>`;
+                } else if (thresholdType === 'dynamic') {
+                    typeSpecificUI = `
+                        <div class="bg-emerald-50 border border-emerald-200 rounded-2xl p-6 space-y-5">
+                            <div class="flex items-center gap-2 text-emerald-600 font-bold text-sm">
+                                <i data-lucide="calculator" class="w-4 h-4"></i>
+                                Dynamic Threshold Formula
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Reference Field</label>
+                                <select onchange="updateDynamicField(this.value)"
+                                    class="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500">
+                                    <option value="">Select a field...</option>
+                                    <optgroup label="Customer Fields">
+                                        ${schema.customers.map(f => `<option value="${f}" ${newScenario.config.threshold.dynamic.reference_field === f ? 'selected' : ''}>${f}</option>`).join('')}
+                                    </optgroup>
+                                    <optgroup label="Transaction Fields">
+                                        ${schema.transactions.map(f => `<option value="${f}" ${newScenario.config.threshold.dynamic.reference_field === f ? 'selected' : ''}>${f}</option>`).join('')}
+                                    </optgroup>
+                                </select>
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Calculation Formula</label>
+                                <input type="text" value="${newScenario.config.threshold.dynamic.formula}"
+                                    onchange="updateDynamicFormula(this.value)"
+                                    placeholder="reference_field * 0.5"
+                                    class="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-mono text-slate-700 outline-none focus:ring-2 focus:ring-emerald-500">
+                                <p class="text-xs text-slate-500">Use 'reference_field' as the variable. Example: reference_field * 0.5</p>
+                            </div>
+                            <div class="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                                <div class="text-[10px] font-bold text-amber-600 uppercase tracking-wide mb-1">Example</div>
+                                <p id="formula-example" class="text-sm text-slate-700 font-medium">
+                                    Select a reference field and enter a formula
+                                </p>
+                            </div>
+
+                            <!-- Bounds & Fallback -->
+                            <div class="border-t border-emerald-200 pt-4 space-y-4">
+                                <div class="text-[10px] font-bold text-slate-500 uppercase tracking-wide">Safety Bounds & Fallback</div>
+                                <div class="grid grid-cols-3 gap-4">
+                                    <div class="space-y-1">
+                                        <label class="text-[10px] font-bold text-slate-400 uppercase">Min Threshold</label>
+                                        <input type="number" value="${newScenario.config.threshold.dynamic.min_threshold || ''}"
+                                            onchange="newScenario.config.threshold.dynamic.min_threshold = this.value ? parseFloat(this.value) : null"
+                                            placeholder="None"
+                                            class="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 outline-none">
+                                    </div>
+                                    <div class="space-y-1">
+                                        <label class="text-[10px] font-bold text-slate-400 uppercase">Max Threshold</label>
+                                        <input type="number" value="${newScenario.config.threshold.dynamic.max_threshold || ''}"
+                                            onchange="newScenario.config.threshold.dynamic.max_threshold = this.value ? parseFloat(this.value) : null"
+                                            placeholder="None"
+                                            class="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 outline-none">
+                                    </div>
+                                    <div class="space-y-1">
+                                        <label class="text-[10px] font-bold text-slate-400 uppercase">Fallback Value</label>
+                                        <input type="number" value="${newScenario.config.threshold.dynamic.fallback_value}"
+                                            onchange="newScenario.config.threshold.dynamic.fallback_value = parseFloat(this.value)"
+                                            placeholder="50000"
+                                            class="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-sm font-medium text-slate-700 outline-none">
+                                    </div>
+                                </div>
+                                <p class="text-xs text-slate-500">Fallback is used if calculation fails. Min/Max clamp the calculated threshold.</p>
+                            </div>
+                        </div>
+                        ${setTimeout(updateFormulaExample, 0) ? '' : ''}`;
+                } else if (thresholdType === 'segment') {
+                    typeSpecificUI = `
+                        <div class="bg-purple-50 border border-purple-200 rounded-2xl p-6 space-y-5">
+                            <div class="flex items-center gap-2 text-purple-600 font-bold text-sm">
+                                <i data-lucide="layers" class="w-4 h-4"></i>
+                                Segment-Specific Thresholds
+                            </div>
+                            <div class="space-y-2">
+                                <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Segment Field</label>
+                                <select onchange="updateSegmentField(this.value)"
+                                    class="w-full bg-white border border-slate-200 rounded-xl px-4 py-3 text-sm font-medium text-slate-700 outline-none focus:ring-2 focus:ring-purple-500">
+                                    <option value="">Select a field...</option>
+                                    <optgroup label="Customer Fields">
+                                        ${schema.customers.map(f => `<option value="${f}" ${newScenario.config.threshold.segment.field === f ? 'selected' : ''}>${f}</option>`).join('')}
+                                    </optgroup>
+                                    <optgroup label="Transaction Fields">
+                                        ${schema.transactions.map(f => `<option value="${f}" ${newScenario.config.threshold.segment.field === f ? 'selected' : ''}>${f}</option>`).join('')}
+                                    </optgroup>
+                                </select>
+                                <p class="text-xs text-slate-500">Choose the field to segment customers by</p>
+                            </div>
+                            <div class="space-y-3">
+                                <label class="text-[10px] font-bold text-slate-400 uppercase tracking-wide">Segment Values</label>
+                                <div id="segment-rows" class="space-y-3"></div>
+                                <button onclick="addSegment()" class="flex items-center gap-2 text-purple-600 font-bold text-xs hover:underline mt-2">
+                                    <i data-lucide="plus" class="w-3 h-3"></i> Add Segment
+                                </button>
+                            </div>
+                        </div>
+                        ${setTimeout(renderSegments, 0) ? '' : ''}`;
+                }
+
+                return `
+                    <div class="space-y-6">
+                        <div class="space-y-3">
+                            <label class="text-[10px] font-black text-slate-400 uppercase tracking-widest flex items-center gap-2">
+                                Threshold Type
+                                <span class="text-slate-300 cursor-help" title="Choose how the threshold is calculated">
+                                    <i data-lucide="info" class="w-3 h-3"></i>
+                                </span>
+                            </label>
+                            <select onchange="changeThresholdType(this.value)"
+                                class="w-full bg-white border-2 border-slate-900 rounded-2xl px-6 py-4 font-bold text-slate-700 outline-none">
+                                <option value="fixed" ${thresholdType === 'fixed' ? 'selected' : ''}>Fixed Value</option>
+                                <option value="dynamic" ${thresholdType === 'dynamic' ? 'selected' : ''}>Field-Based (Dynamic)</option>
+                                <option value="segment" ${thresholdType === 'segment' ? 'selected' : ''}>Segment-Based</option>
+                            </select>
+                        </div>
+                        ${typeSpecificUI}
+                    </div>`;
+            }
+        },
+        5: {
+            title: 'Review & Deploy',
+            render: () => {
+                const threshold = newScenario.config.threshold;
+                let thresholdDisplay = '';
+
+                if (threshold.type === 'fixed') {
+                    thresholdDisplay = `Fixed: >= ${threshold.fixed_value}`;
+                } else if (threshold.type === 'dynamic') {
+                    thresholdDisplay = `Dynamic: ${threshold.dynamic.formula.replace('reference_field', threshold.dynamic.reference_field || '?')}`;
+                } else if (threshold.type === 'segment') {
+                    const segCount = threshold.segment.values.length;
+                    thresholdDisplay = `Segment-based on ${threshold.segment.field || '?'} (${segCount} segments)`;
+                }
+
+                const priorityColors = { CRITICAL: 'bg-red-100 text-red-700', HIGH: 'bg-orange-100 text-orange-700', MEDIUM: 'bg-yellow-100 text-yellow-700', LOW: 'bg-green-100 text-green-700' };
+
+                return `
+                    <div class="space-y-5 text-sm text-slate-600">
+                        <!-- Scenario Summary -->
+                        <div class="bg-slate-50 p-5 rounded-2xl border border-slate-200">
+                            <div class="flex items-center justify-between mb-4">
+                                <h4 class="font-black text-slate-900 uppercase tracking-widest text-xs">Scenario Summary</h4>
+                                <div class="flex items-center gap-2">
+                                    <span class="px-2 py-1 rounded-lg text-xs font-bold ${priorityColors[newScenario.priority]}">${newScenario.priority}</span>
+                                    <span class="px-2 py-1 rounded-lg text-xs font-bold ${newScenario.is_active ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-200 text-slate-600'}">${newScenario.is_active ? 'Active' : 'Inactive'}</span>
+                                </div>
+                            </div>
+                            <div class="grid grid-cols-2 gap-3 text-sm">
+                                <div><span class="text-slate-400 font-medium">Name:</span> <span class="font-bold text-slate-800">${newScenario.scenario_name || 'Untitled'}</span></div>
+                                <div><span class="text-slate-400 font-medium">Filters:</span> <span class="font-bold text-slate-800">${newScenario.config.filters.length} rules</span></div>
+                                <div><span class="text-slate-400 font-medium">Logic:</span> <span class="font-bold text-slate-800 uppercase">${newScenario.config.aggregation.function}(${newScenario.config.aggregation.field})</span></div>
+                                <div><span class="text-slate-400 font-medium">Window:</span> <span class="font-bold text-slate-800">${newScenario.config.aggregation.rolling_window_days} days</span></div>
+                                <div class="col-span-2"><span class="text-slate-400 font-medium">Threshold:</span> <span class="font-bold text-slate-800">${thresholdDisplay}</span></div>
+                                ${newScenario.config.aggregation.count_threshold.enabled ? `<div class="col-span-2"><span class="text-slate-400 font-medium">Min Transactions:</span> <span class="font-bold text-slate-800">${newScenario.config.aggregation.count_threshold.min_transactions}</span></div>` : ''}
+                            </div>
+                        </div>
+
+                        <div class="flex items-start gap-3 p-4 bg-blue-50 rounded-xl text-blue-700">
+                            <i data-lucide="info" class="w-5 h-5 shrink-0 mt-0.5"></i>
+                            <p>This scenario will be ${newScenario.is_active ? 'active immediately' : 'saved as inactive'}. Review all settings before deploying.</p>
+                        </div>
+
+                        <!-- Test Scenario Action -->
+                        <div class="pt-4">
+                            <button onclick="testScenario()" id="test-scenario-btn"
+                                class="w-full py-4 border-2 border-dashed border-slate-300 rounded-[2rem] text-slate-500 font-bold hover:border-blue-500 hover:text-blue-600 hover:bg-blue-50/50 transition-all flex flex-col items-center justify-center gap-1 group">
+                                <div class="flex items-center gap-2">
+                                    <i data-lucide="test-tube-2" class="w-5 h-5 group-hover:animate-bounce"></i>
+                                    <span>Dry Run Logic against Latest Data</span>
+                                </div>
+                                <p class="text-[10px] uppercase tracking-widest opacity-60">Verify if this rule catches anything</p>
+                            </button>
+                            
+                            <!-- Test Result Display -->
+                            <div id="scenario-test-result" class="hidden mt-6 animate-in fade-in slide-in-from-top-4">
+                                <div class="bg-white border rounded-[2rem] overflow-hidden shadow-sm" id="test-result-card">
+                                    <div class="p-6 border-b flex items-center justify-between" id="test-result-header">
+                                        <!-- Header content injected -->
+                                    </div>
+                                    <div class="p-4" id="test-result-alerts">
+                                        <!-- Alert list injected -->
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>`;
+            }
+        }
+    };
+
+    function renderStep() {
+        // Persist logic for step 1 input to state if needed (handled by onchange)
+        const step = steps[currentStep];
+        document.getElementById('wizard-content').innerHTML = `
+            <div class="animate-in">
+                <h3 class="text-xl font-black text-slate-900 mb-8 flex items-center gap-3">
+                    <span class="w-2 h-8 bg-blue-600 rounded-full"></span>
+                    ${step.title}
+                </h3>
+                ${step.render()}
+            </div>
+        `;
+        lucide.createIcons();
+
+        // Update UI states
+        for (let i = 1; i <= 5; i++) {
+            const el = document.getElementById(`step-id-${i}`);
+            if (!el) continue;
+            const circle = el.querySelector('div');
+
+            if (i === currentStep) {
+                el.classList.remove('opacity-40');
+                circle.className = 'w-10 h-10 rounded-full bg-blue-600 text-white flex items-center justify-center font-bold text-sm ring-4 ring-blue-50 transition-all';
+                circle.innerHTML = i;
+            } else if (i < currentStep) {
+                el.classList.remove('opacity-40');
+                circle.className = 'w-10 h-10 rounded-full bg-emerald-500 text-white flex items-center justify-center font-bold text-sm transition-all';
+                circle.innerHTML = '<i data-lucide="check" class="w-5 h-5"></i>';
+            } else {
+                el.classList.add('opacity-40');
+                circle.className = 'w-10 h-10 rounded-full bg-slate-200 text-slate-500 flex items-center justify-center font-bold text-sm transition-all';
+                circle.innerHTML = i;
+            }
+        }
+
+        document.getElementById('prev-btn').classList.toggle('hidden', currentStep === 1);
+        const nextBtn = document.getElementById('next-btn');
+        if (currentStep === 5) {
+            nextBtn.innerHTML = 'Deploy Scenario <i data-lucide="rocket" class="w-4 h-4 ml-2"></i>';
+        } else {
+            nextBtn.innerHTML = 'Next Step <i data-lucide="arrow-right" class="w-4 h-4 ml-2"></i>';
+        }
+        lucide.createIcons();
+    }
+
+    // Navigation Handlers
+    document.getElementById('create-btn').addEventListener('click', () => {
+        currentStep = 1;
+        newScenario = {
+            scenario_name: '',
+            description: '',
+            priority: 'MEDIUM',
+            is_active: true,
+            config: {
+                filters: [],
+                aggregation: {
+                    field: 'transaction_amount',
+                    function: 'sum',
+                    rolling_window_days: 30,
+                    group_by: 'customer_id',
+                    count_threshold: { enabled: false, min_transactions: 3 }
+                },
+                threshold: {
+                    type: 'fixed',
+                    fixed_value: 10000,
+                    dynamic: { reference_field: '', formula: 'reference_field * 0.5', fallback_value: 50000, min_threshold: null, max_threshold: null },
+                    segment: { field: '', values: [] }
+                }
+            }
+        };
+
+        // Switch Views
+        document.getElementById('scenario-list-view').classList.add('hidden');
+        document.getElementById('scenario-wizard-view').classList.remove('hidden');
+
+        renderStep();
+    });
+
+    document.getElementById('close-wizard').addEventListener('click', () => {
+        document.getElementById('scenario-wizard-view').classList.add('hidden');
+        document.getElementById('scenario-list-view').classList.remove('hidden');
+    });
+
+    document.getElementById('next-btn').addEventListener('click', async () => {
+        // Validation for Step 1
+        if (currentStep === 1) {
+            const nameInput = document.getElementById('wiz-name');
+            if (!newScenario.scenario_name.trim()) {
+                nameInput.classList.add('ring-2', 'ring-red-500', 'bg-red-50');
+                nameInput.classList.remove('bg-slate-50', 'border-slate-200');
+                nameInput.placeholder = "Required: Please enter a scenario name";
+                nameInput.focus();
+                return;
+            } else {
+                nameInput.classList.remove('ring-2', 'ring-red-500', 'bg-red-50');
+                nameInput.classList.add('bg-slate-50', 'border-slate-200');
+            }
+        }
+
+        if (currentStep < 5) {
+            currentStep++;
+            renderStep();
+        } else {
+            // Deploy - Save scenario to backend
+            const btn = document.getElementById('next-btn');
+            btn.disabled = true;
+            btn.innerHTML = '<i data-lucide="loader-2" class="w-4 h-4 animate-spin mr-2"></i> Deploying...';
+            lucide.createIcons();
+
+            try {
+                const payload = {
+                    scenario_id: newScenario.scenario_id || null,
+                    scenario_name: newScenario.scenario_name,
+                    description: newScenario.description,
+                    priority: newScenario.priority,
+                    enabled: newScenario.is_active,
+                    config_json: newScenario.config
+                };
+
+                const csrftoken = getCookie('csrftoken');
+
+                const res = await fetch('/api/rules/scenarios/', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'X-CSRFToken': csrftoken
+                    },
+                    body: JSON.stringify(payload)
+                });
+
+                if (!res.ok) {
+                    throw new Error(`HTTP error! status: ${res.status}`);
+                }
+
+                const result = await res.json();
+                console.log('Scenario saved:', result);
+
+                // Success - switch back to list view
+                document.getElementById('scenario-wizard-view').classList.add('hidden');
+                document.getElementById('scenario-list-view').classList.remove('hidden');
+                btn.disabled = false;
+                btn.innerHTML = 'Deploy Scenario <i data-lucide="rocket" class="w-4 h-4 ml-2"></i>';
+                fetchScenarios(); // Refresh list
+
+            } catch (error) {
+                console.error('Failed to save scenario:', error);
+                btn.disabled = false;
+                btn.innerHTML = '<i data-lucide="alert-circle" class="w-4 h-4 mr-2"></i> Retry Deploy';
+                lucide.createIcons();
+                alert('Failed to save scenario. Please try again.');
+            }
+        }
+    });
+
+    document.getElementById('prev-btn').addEventListener('click', () => {
+        if (currentStep > 1) {
+            currentStep--;
+            renderStep();
+        }
+    });
+
+    fetchScenarios();
+    fetchSchema();
+</script>
+{% endblock %}

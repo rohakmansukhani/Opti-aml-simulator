@@ -1,0 +1,337 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}Reports - AML Simulator{% endblock %}
+
+{% block dashboard_content %}
+<div class="max-w-7xl mx-auto space-y-8 animate-in">
+    <!-- Header -->
+    <div class="flex justify-between items-end">
+        <div>
+            <h1 class="text-3xl font-extrabold text-slate-900 tracking-tight" id="page-title">Intelligence Reports</h1>
+            <p class="text-slate-500 mt-1 font-medium" id="page-subtitle">Consolidated view of simulation historical
+                data and alert triggers</p>
+        </div>
+        <div class="flex gap-3">
+            <button id="back-to-runs"
+                class="hidden bg-slate-100 hover:bg-slate-200 text-slate-600 px-5 py-2.5 rounded-xl font-bold transition-all flex items-center gap-2">
+                <i data-lucide="arrow-left" class="w-4 h-4"></i>
+                Back to Runs
+            </button>
+            <div class="relative">
+                <i data-lucide="search" class="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4"></i>
+                <input type="text" id="main-search" placeholder="Search by Simulation Run..."
+                    class="pl-10 pr-4 py-2 bg-white border border-slate-200 rounded-xl text-sm focus:ring-2 focus:ring-blue-500 outline-none w-64 shadow-sm">
+            </div>
+            <button id="export-btn"
+                class="hidden bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-indigo-100 flex items-center gap-2">
+                <i data-lucide="download" class="w-4 h-4"></i>
+                Export Results
+            </button>
+        </div>
+    </div>
+
+    <div class="space-y-8">
+        <!-- Main Content Table -->
+        <div class="w-full">
+            <div
+                class="bg-white rounded-[2rem] border border-slate-100 shadow-sm overflow-hidden min-h-[600px] flex flex-col">
+                <table class="w-full text-left" id="main-table">
+                    <thead id="table-head">
+                        <!-- Headings changed dynamically -->
+                    </thead>
+                    <tbody id="table-body" class="divide-y divide-slate-50">
+                        <!-- Loaded via JS -->
+                    </tbody>
+                </table>
+                <div id="table-loading" class="flex-grow flex items-center justify-center hidden">
+                    <div class="animate-spin rounded-full h-10 w-10 border-4 border-blue-600 border-t-transparent">
+                    </div>
+                </div>
+                <div id="table-empty" class="flex-grow flex flex-col items-center justify-center p-12 text-center">
+                    <div
+                        class="w-20 h-20 bg-slate-50 rounded-full flex items-center justify-center mb-4 text-slate-200">
+                        <i data-lucide="eye-off" class="w-10 h-10"></i>
+                    </div>
+                    <h4 class="text-lg font-bold text-slate-900" id="empty-title">No data found</h4>
+                    <p class="text-slate-500 text-sm" id="empty-subtitle">Your simulation history is empty</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Alert Detail Dialog -->
+<div id="alert-modal"
+    class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-white w-full max-w-4xl rounded-[3rem] shadow-2xl relative overflow-hidden animate-in">
+        <div class="absolute top-0 right-0 p-8">
+            <button id="close-alert-modal"
+                class="w-10 h-10 rounded-full bg-slate-50 text-slate-400 hover:text-slate-900 transition-colors flex items-center justify-center">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+        </div>
+
+        <div class="p-10">
+            <div class="flex items-center gap-4 mb-8">
+                <div class="w-14 h-14 bg-red-50 text-red-600 rounded-2xl flex items-center justify-center">
+                    <i data-lucide="shield-alert" class="w-7 h-7"></i>
+                </div>
+                <div>
+                    <h2 class="text-2xl font-black text-slate-900 tracking-tight" id="modal-alert-id">Alert #ID</h2>
+                    <p class="text-slate-500 font-medium" id="modal-scenario-name">Scenario Name</p>
+                </div>
+                <div class="ml-auto flex gap-2">
+                    <span id="modal-risk-badge" class="px-4 py-1.5 rounded-xl font-black uppercase text-xs">High
+                        Risk</span>
+                </div>
+            </div>
+
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-8 mb-8">
+                <div class="p-6 bg-slate-50 rounded-3xl border border-slate-100">
+                    <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-3">Customer Entity</p>
+                    <p id="modal-customer-name" class="font-bold text-slate-900 truncate">Customer Name</p>
+                    <p id="modal-customer-id" class="text-xs font-medium text-slate-500 font-mono">ID: 000</p>
+                </div>
+                <div class="md:col-span-2 p-6 bg-blue-50/30 rounded-3xl border border-blue-50">
+                    <p class="text-[10px] font-black text-blue-400 uppercase tracking-widest mb-3">Trigger Intelligence
+                    </p>
+                    <p id="modal-trigger-reason" class="text-sm text-slate-700 leading-relaxed italic">Analysis logic
+                        output goes here...</p>
+                </div>
+            </div>
+
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    let viewMode = 'runs'; // 'runs' or 'alerts'
+    let simulationRuns = [];
+    let currentAlerts = [];
+    let selectedRunId = null;
+
+    async function initPage() {
+        await fetchRuns();
+        showRunsView();
+    }
+
+    async function fetchRuns() {
+        try {
+            const res = await fetch('/api/simulation/runs/');
+            simulationRuns = await res.json();
+            simulationRuns.sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
+        } catch (e) {
+            console.error("Failed to fetch runs", e);
+        }
+    }
+
+    function showRunsView() {
+        viewMode = 'runs';
+        selectedRunId = null;
+
+        document.getElementById('page-title').textContent = 'Simulation History';
+        document.getElementById('page-subtitle').textContent = 'Review historical simulation runs and aggregate alert volumes';
+        document.getElementById('back-to-runs').classList.add('hidden');
+        document.getElementById('export-btn').classList.add('hidden');
+        document.getElementById('main-search').placeholder = 'Search by Simulation Run...';
+
+        const head = document.getElementById('table-head');
+        head.innerHTML = `
+            <tr class="bg-slate-50/50 border-b border-slate-100 text-slate-500 text-[10px] font-black uppercase tracking-widest">
+                <th class="px-6 py-5">Run</th>
+                <th class="px-6 py-5">Scenarios Triggered</th>
+                <th class="px-6 py-5">Alerts</th>
+                <th class="px-6 py-5">Status</th>
+                <th class="px-6 py-5">Execution Date</th>
+                <th class="px-6 py-5 text-right">Actions</th>
+            </tr>
+        `;
+
+        renderRunsTable();
+    }
+
+    function renderRunsTable() {
+        const body = document.getElementById('table-body');
+        const empty = document.getElementById('table-empty');
+        const search = document.getElementById('main-search').value.toLowerCase();
+
+        const filtered = simulationRuns.filter(r =>
+            `run ${r.run_number}`.includes(search) ||
+            r.scenario_names.some(name => name.toLowerCase().includes(search))
+        );
+
+        if (filtered.length === 0) {
+            body.innerHTML = '';
+            empty.classList.remove('hidden');
+            return;
+        }
+
+        empty.classList.add('hidden');
+        body.innerHTML = filtered.map(r => `
+            <tr class="hover:bg-slate-50/50 transition-colors group">
+                <td class="px-6 py-5">
+                    <span class="font-bold text-slate-900 text-sm">Run #${r.run_number}</span>
+                    <p class="text-[10px] text-slate-400 font-mono">ID: ${r.run_id.slice(-8)}</p>
+                </td>
+                <td class="px-6 py-5">
+                    <div class="flex flex-wrap gap-1">
+                        ${r.scenario_names.map(name => `<span class="px-1.5 py-0.5 bg-slate-50 border border-slate-100 rounded text-[9px] font-bold text-slate-500 uppercase">${name}</span>`).join('')}
+                    </div>
+                </td>
+                <td class="px-6 py-5">
+                    <span class="px-2 py-0.5 rounded-lg bg-blue-50 text-blue-600 text-[10px] font-black">${r.total_alerts} ALERTS</span>
+                </td>
+                <td class="px-6 py-5">
+                    <span class="px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-tighter ${r.status === 'completed' ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600'}">
+                        ${r.status}
+                    </span>
+                </td>
+                <td class="px-6 py-5 text-xs font-medium text-slate-500">
+                    ${new Date(r.created_at).toLocaleString()}
+                </td>
+                <td class="px-6 py-5 text-right">
+                    <button onclick="viewRunAlerts('${r.run_id}')" class="bg-slate-900 hover:bg-black text-white px-4 py-2 rounded-xl text-[10px] font-black uppercase tracking-widest transition-all">
+                        View Alerts
+                    </button>
+                </td>
+            </tr>
+        `).join('');
+        lucide.createIcons();
+    }
+
+    async function viewRunAlerts(runId) {
+        viewMode = 'alerts';
+        selectedRunId = runId;
+
+        const run = simulationRuns.find(r => r.run_id === runId);
+        document.getElementById('page-title').textContent = `Alerts: Run #${runId.slice(-8)}`;
+        document.getElementById('page-subtitle').textContent = `Detailed alert triggers for the simulation executed on ${new Date(run.created_at).toLocaleString()}`;
+        document.getElementById('back-to-runs').classList.remove('hidden');
+        document.getElementById('export-btn').classList.remove('hidden');
+        document.getElementById('main-search').placeholder = 'Search by Customer ID...';
+        document.getElementById('main-search').value = '';
+
+        const head = document.getElementById('table-head');
+        head.innerHTML = `
+            <tr class="bg-slate-50/50 border-b border-slate-100 text-slate-500 text-[10px] font-black uppercase tracking-widest">
+                <th class="px-6 py-5">Alert ID</th>
+                <th class="px-6 py-5">Customer (ID)</th>
+                <th class="px-6 py-5">Scenario Triggered</th>
+                <th class="px-6 py-5">Risk</th>
+                <th class="px-6 py-5 text-right">Actions</th>
+            </tr>
+        `;
+
+        const body = document.getElementById('table-body');
+        const loading = document.getElementById('table-loading');
+        const empty = document.getElementById('table-empty');
+
+        body.innerHTML = '';
+        empty.classList.add('hidden');
+        loading.classList.remove('hidden');
+
+        try {
+            const res = await fetch(`/api/simulation/${runId}/alerts/`);
+            currentAlerts = await res.json();
+            loading.classList.add('hidden');
+            renderAlertsTable();
+        } catch (e) {
+            loading.classList.add('hidden');
+            empty.classList.remove('hidden');
+        }
+    }
+
+    function renderAlertsTable() {
+        const body = document.getElementById('table-body');
+        const empty = document.getElementById('table-empty');
+        const search = document.getElementById('main-search').value.toLowerCase();
+
+        const filtered = currentAlerts.filter(a =>
+            a.customer_id.toLowerCase().includes(search) ||
+            (a.customer_name && a.customer_name.toLowerCase().includes(search)) ||
+            a.scenario_name.toLowerCase().includes(search)
+        );
+
+        if (filtered.length === 0) {
+            body.innerHTML = '';
+            empty.classList.remove('hidden');
+            document.getElementById('empty-title').textContent = 'No alerts match criteria';
+            document.getElementById('empty-subtitle').textContent = 'Try a different Customer ID or Scenario name';
+            return;
+        }
+
+        empty.classList.add('hidden');
+        body.innerHTML = filtered.map(a => `
+            <tr class="hover:bg-slate-50/50 transition-colors group">
+                <td class="px-6 py-4">
+                    <span class="font-mono text-xs font-bold text-slate-400">#${a.alert_id.slice(-8)}</span>
+                </td>
+                <td class="px-6 py-4">
+                    <p class="text-sm font-bold text-slate-900">${a.customer_name || 'N/A'}</p>
+                    <p class="text-[10px] text-slate-500 font-mono">${a.customer_id}</p>
+                </td>
+                <td class="px-6 py-4">
+                    <span class="text-xs font-bold text-slate-700">${a.scenario_name}</span>
+                </td>
+                <td class="px-6 py-4">
+                    <span class="px-2 py-1 rounded-lg text-[9px] font-black uppercase tracking-tighter ${a.risk_score > 70 ? 'bg-red-50 text-red-600' : 'bg-amber-50 text-amber-600'}">
+                        ${a.risk_score > 70 ? 'Critical' : 'Elevated'} (${a.risk_score})
+                    </span>
+                </td>
+                <td class="px-6 py-4 text-right">
+                     <button onclick="viewAlertDetail('${a.alert_id}')" class="p-2 text-slate-300 hover:text-blue-600 transition-colors">
+                        <i data-lucide="eye" class="w-5 h-5"></i>
+                     </button>
+                </td>
+            </tr>
+        `).join('');
+        lucide.createIcons();
+    }
+
+    // Modal & Back Navigation
+    document.getElementById('back-to-runs').addEventListener('click', showRunsView);
+
+    document.getElementById('main-search').addEventListener('input', () => {
+        if (viewMode === 'runs') renderRunsTable();
+        else renderAlertsTable();
+    });
+
+    async function viewAlertDetail(alertId) {
+        try {
+            const res = await fetch(`/api/simulation/alerts/${alertId}/`);
+            const a = await res.json();
+
+            document.getElementById('modal-alert-id').textContent = `Alert #${a.alert_id.slice(-8)}`;
+            document.getElementById('modal-scenario-name').textContent = a.scenario_name;
+            document.getElementById('modal-customer-name').textContent = a.customer_name || 'Individual Entity';
+            document.getElementById('modal-customer-id').textContent = `ID: ${a.customer_id}`;
+            document.getElementById('modal-trigger-reason').textContent = a.trigger_reason || 'No evidence provided for this alert trigger.';
+
+            const badge = document.getElementById('modal-risk-badge');
+            if (a.risk_score > 70) {
+                badge.className = 'px-4 py-1.5 rounded-xl font-black uppercase text-xs bg-red-100 text-red-700';
+                badge.textContent = 'Critical Risk';
+            } else {
+                badge.className = 'px-4 py-1.5 rounded-xl font-black uppercase text-xs bg-amber-100 text-amber-700';
+                badge.textContent = 'Elevated Risk';
+            }
+
+            document.getElementById('alert-modal').classList.remove('hidden');
+            lucide.createIcons();
+        } catch (e) { }
+    }
+
+    document.getElementById('close-alert-modal').addEventListener('click', () => {
+        document.getElementById('alert-modal').classList.add('hidden');
+    });
+
+    document.getElementById('export-btn').addEventListener('click', () => {
+        if (!selectedRunId) return;
+        window.location.href = `/api/simulation/${selectedRunId}/export/`;
+    });
+
+    initPage();
+</script>
+{% endblock %}

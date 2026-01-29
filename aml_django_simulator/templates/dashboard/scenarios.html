@@ -1,0 +1,73 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}Scenarios - AML Simulator{% endblock %}
+
+{% block dashboard_content %}
+<div class="space-y-8 animate-in">
+    <div class="flex justify-between items-center">
+        <div>
+            <h1 class="text-3xl font-extrabold text-slate-900 tracking-tight">Scenarios</h1>
+            <p class="text-slate-500 mt-1 font-medium">Manage and monitor detection rules</p>
+        </div>
+        <a href="/dashboard/builder/"
+            class="bg-blue-600 hover:bg-blue-700 text-white px-6 py-3 rounded-2xl font-bold transition-all shadow-lg flex items-center gap-2">
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            New Scenario
+        </a>
+    </div>
+
+    <div class="grid gap-6" id="scenarios-grid">
+        <!-- Loaded via JS -->
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    async function loadScenarios() {
+        try {
+            const res = await fetch('/api/rules/scenarios/');
+            if (!res.ok) throw new Error('Failed to load scenarios');
+            const scenarios = await res.json();
+
+            const grid = document.getElementById('scenarios-grid');
+            if (scenarios.length === 0) {
+                grid.innerHTML = `
+                    <div class="p-12 text-center text-slate-400 bg-white rounded-[2rem] border border-slate-100">
+                        <i data-lucide="scroll" class="w-12 h-12 mx-auto mb-4 opacity-50"></i>
+                        <p class="font-bold">No scenarios found</p>
+                        <p class="text-sm mt-1">Create your first detection rule to get started</p>
+                    </div>
+                `;
+                lucide.createIcons();
+                return;
+            }
+
+            grid.innerHTML = scenarios.map(s => `
+                <div class="bg-white p-6 rounded-[2rem] border border-slate-100 shadow-sm flex item-start justify-between group hover:shadow-md transition-all">
+                    <div class="flex gap-6">
+                        <div class="w-12 h-12 rounded-2xl ${s.is_active ? 'bg-blue-50 text-blue-600' : 'bg-slate-100 text-slate-400'} flex items-center justify-center shrink-0">
+                            <i data-lucide="${s.is_active ? 'zap' : 'pause'}" class="w-6 h-6"></i>
+                        </div>
+                        <div>
+                            <h3 class="text-lg font-black text-slate-900">${s.scenario_name}</h3>
+                            <div class="flex gap-2 mt-4">
+                                <span class="px-3 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${s.is_active ? 'bg-emerald-50 text-emerald-600' : 'bg-slate-100 text-slate-500'}">
+                                    ${s.is_active ? 'Active' : 'Disabled'}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                    <button class="w-10 h-10 rounded-xl hover:bg-slate-50 text-slate-300 hover:text-slate-600 flex items-center justify-center transition-colors">
+                        <i data-lucide="more-horizontal" class="w-5 h-5"></i>
+                    </button>
+                </div>
+            `).join('');
+            lucide.createIcons();
+        } catch (e) {
+            console.error(e);
+        }
+    }
+    loadScenarios();
+</script>
+{% endblock %}

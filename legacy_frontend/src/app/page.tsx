@@ -136,8 +136,8 @@ function AuthScreen({ onSuccess }: { onSuccess: () => void }) {
 
                 {message && (
                     <div className={`text-xs p-3 rounded border ${message.type === 'success'
-                            ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
-                            : 'bg-red-50 text-red-700 border-red-100'
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-100'
+                        : 'bg-red-50 text-red-700 border-red-100'
                         }`}>
                         {message.text}
                     </div>
@@ -149,6 +149,17 @@ function AuthScreen({ onSuccess }: { onSuccess: () => void }) {
                     className="w-full bg-blue-600 hover:bg-blue-700 text-white py-3 rounded-lg font-bold transition-all shadow-lg shadow-blue-200 flex justify-center items-center disabled:opacity-50"
                 >
                     {loading ? <Loader2 size={18} className="animate-spin" /> : (mode === 'signin' ? 'Sign In' : 'Create Account')}
+                </button>
+
+                <button
+                    type="button"
+                    onClick={() => {
+                        setAuth({ id: 'demo-user', email: 'demo@example.com' }, 'demo-token');
+                        onSuccess();
+                    }}
+                    className="w-full bg-slate-50 hover:bg-slate-100 text-slate-600 py-3 rounded-lg font-bold border border-slate-200 transition-all mt-4"
+                >
+                    Enter in Demo Mode (Dev only)
                 </button>
             </form>
 

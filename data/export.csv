@@ -1,0 +1,2 @@
+Alert ID,Scenario,Risk Score,Customer ID,Customer Name,Occupation,Annual Income,Date,Trigger Reason
+aa3369e3-218b-451b-83ac-16347349cf2b,Complex International Wire Structuring Detection,64,CUST016,Karen Martinez,Student,7500,2024-02-02 00:00:00,"Customer Karen Martinez (Student, Income: 7500) triggered 'Complex International Wire Structuring Detection'. Aggregated value: 19,300.00 across 3 transactions. Dynamic threshold of 15,000.00 used (calculated as customer.annual_income * 0.5). "

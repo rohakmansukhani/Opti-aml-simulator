@@ -1,0 +1,351 @@
+{% extends 'dashboard_base.html' %}
+
+{% block title %}Database - AML Simulator{% endblock %}
+
+{% block dashboard_content %}
+<div class="space-y-8 animate-in">
+    <div class="flex justify-between items-end">
+        <div>
+            <h1 class="text-3xl font-extrabold text-slate-900 tracking-tight">Data Registry</h1>
+            <p class="text-slate-500 mt-1 font-medium">Snapshot of the currently active simulation dataset</p>
+        </div>
+        <button id="open-upload-modal"
+            class="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2.5 rounded-xl font-bold transition-all shadow-lg shadow-blue-100 flex items-center gap-2">
+            <i data-lucide="plus" class="w-4 h-4"></i>
+            Add Database
+        </button>
+    </div>
+
+    <!-- Active Dataset Card -->
+    <div class="bg-white p-8 rounded-[3rem] shadow-xl shadow-blue-900/5 border border-slate-100 relative"
+        id="database-card">
+        <div class="absolute top-0 right-0 w-64 h-64 bg-slate-50 rounded-full blur-3xl -mr-32 -mt-32"></div>
+        <div class="relative z-10 flex flex-col items-center justify-center h-48 text-slate-400">
+            <i data-lucide="loader-2" class="w-8 h-8 animate-spin"></i>
+        </div>
+    </div>
+</div>
+
+<!-- Upload Modal -->
+<div id="upload-modal"
+    class="fixed inset-0 z-50 hidden bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-4">
+    <div class="bg-white w-full max-w-2xl rounded-[3rem] shadow-2xl relative overflow-hidden animate-in">
+        <div class="absolute top-0 right-0 p-8">
+            <button id="close-upload-modal"
+                class="w-10 h-10 rounded-full bg-slate-50 text-slate-400 hover:text-slate-900 transition-colors flex items-center justify-center">
+                <i data-lucide="x" class="w-5 h-5"></i>
+            </button>
+        </div>
+
+        <div class="p-10">
+            <div class="flex items-center gap-4 mb-8">
+                <div
+                    class="w-14 h-14 bg-blue-50 text-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-100">
+                    <i data-lucide="upload-cloud" class="w-7 h-7"></i>
+                </div>
+                <div>
+                    <h2 class="text-2xl font-black text-slate-900 tracking-tight">Ignite Dataset</h2>
+                    <p class="text-slate-500 font-medium">Re-upload or add new transaction/customer data</p>
+                </div>
+            </div>
+
+            <div class="space-y-6">
+                <!-- Database Name -->
+                <div id="db-name-wrapper">
+                    <label
+                        class="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block ml-1">Database
+                        Name</label>
+                    <input type="text" id="modal-db-name"
+                        class="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 outline-none transition-all font-bold text-slate-700 placeholder:text-slate-400"
+                        placeholder="e.g. Q1 Transaction Batch">
+                </div>
+
+                <div class="grid grid-cols-2 gap-6">
+                    <div class="space-y-2">
+                        <label
+                            class="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block ml-1">Transaction
+                            CSV</label>
+                        <label for="modal-tx-file"
+                            class="flex flex-col items-center justify-center w-full p-4 border border-slate-200 border-dashed rounded-3xl bg-slate-50 hover:bg-white transition-all cursor-pointer group">
+                            <div
+                                class="w-8 h-8 bg-white rounded-lg flex items-center justify-center mb-2 shadow-sm text-slate-400 group-hover:text-blue-500 transition-colors">
+                                <i data-lucide="file-text" class="w-4 h-4"></i>
+                            </div>
+                            <span id="modal-tx-label" class="text-[10px] font-bold text-slate-500">Select File</span>
+                            <input type="file" id="modal-tx-file" accept=".csv" class="hidden">
+                        </label>
+                    </div>
+                    <div class="space-y-2">
+                        <label
+                            class="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2 block ml-1">Customer
+                            CSV</label>
+                        <label for="modal-cust-file"
+                            class="flex flex-col items-center justify-center w-full p-4 border border-slate-200 border-dashed rounded-3xl bg-slate-50 hover:bg-white transition-all cursor-pointer group">
+                            <div
+                                class="w-8 h-8 bg-white rounded-lg flex items-center justify-center mb-2 shadow-sm text-slate-400 group-hover:text-emerald-500 transition-colors">
+                                <i data-lucide="file-text" class="w-4 h-4"></i>
+                            </div>
+                            <span id="modal-cust-label" class="text-[10px] font-bold text-slate-500">Select File</span>
+                            <input type="file" id="modal-cust-file" accept=".csv" class="hidden">
+                        </label>
+                    </div>
+                </div>
+
+                <div id="modal-upload-error"
+                    class="hidden p-4 bg-red-50 text-red-700 text-xs font-bold rounded-2xl border border-red-100"></div>
+
+                <div class="pt-4 flex gap-4">
+                    <button id="cancel-upload"
+                        class="flex-1 py-4 text-slate-500 font-bold hover:text-slate-900 transition-colors">Cancel</button>
+                    <button id="modal-upload-btn"
+                        class="flex-[2] bg-blue-600 hover:bg-blue-700 text-white py-4 rounded-2xl font-black transition-all shadow-xl shadow-blue-200 flex items-center justify-center gap-2 group">
+                        <span id="modal-upload-text">Initialize Ignition</span>
+                        <i data-lucide="zap" class="w-5 h-5 fill-white group-hover:rotate-12 transition-transform"></i>
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    async function loadDatabaseStats() {
+        try {
+            const res = await fetch('/api/dashboard/stats/');
+            if (!res.ok) throw new Error('Failed to load stats');
+            const data = await res.json();
+
+            const card = document.getElementById('database-card');
+
+            if (!data.has_data) {
+                card.innerHTML = `
+                    <div class="text-center py-12">
+                         <div class="w-16 h-16 bg-slate-50 rounded-2xl flex items-center justify-center text-slate-400 mx-auto mb-4">
+                            <i data-lucide="database" class="w-8 h-8"></i>
+                        </div>
+                        <h3 class="text-lg font-bold text-slate-900">No Active Data</h3>
+                        <p class="text-slate-500 text-sm mt-2 mb-6">Return to the home page to ignite a new dataset.</p>
+                        <a href="/" class="text-blue-600 font-bold hover:underline">Go to Ignition</a>
+                    </div>
+                `;
+            } else {
+                card.innerHTML = `
+                    <div class="flex items-start justify-between relative z-10 mb-8">
+                        <div class="flex items-center gap-4">
+                            <div class="w-12 h-12 bg-emerald-50 text-emerald-600 rounded-xl flex items-center justify-center">
+                                <i data-lucide="database" class="w-6 h-6"></i>
+                            </div>
+                            <div>
+                                <h2 class="text-xl font-black text-slate-900">${data.dataset_name || 'Active Dataset'}</h2>
+                                <p class="text-emerald-600 text-[10px] font-black uppercase tracking-widest flex items-center gap-1.5 mt-0.5">
+                                    <span class="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse"></span>
+                                    Live & Indexed
+                                </p>
+                            </div>
+                        </div>
+                        <div class="relative">
+                            <button onclick="toggleMenu('${data.dataset_id}')" class="p-2 text-slate-400 hover:text-slate-900 hover:bg-slate-50 rounded-lg transition-all">
+                                <i data-lucide="more-vertical" class="w-5 h-5"></i>
+                            </button>
+                            <div id="menu-${data.dataset_id}" class="hidden absolute right-0 mt-2 w-48 bg-white border border-slate-100 rounded-2xl shadow-xl shadow-slate-200/50 p-2 z-20">
+                                <button onclick="modifyDataset()" class="w-full text-left px-4 py-2 text-sm font-bold text-slate-700 hover:bg-slate-50 rounded-xl flex items-center gap-2">
+                                    <i data-lucide="edit-3" class="w-4 h-4"></i>
+                                    Modify Data
+                                </button>
+                                <button onclick="deleteDataset('${data.dataset_id}')" class="w-full text-left px-4 py-2 text-sm font-bold text-red-600 hover:bg-red-50 rounded-xl flex items-center gap-2">
+                                    <i data-lucide="trash-2" class="w-4 h-4"></i>
+                                    Delete Dataset
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <div class="grid md:grid-cols-2 gap-6 relative z-10">
+                        <div class="p-6 bg-slate-50/50 rounded-3xl border border-slate-100">
+                            <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Transaction Volume</p>
+                            <p class="text-3xl font-black text-slate-900">${data.transactions_scanned.toLocaleString()}</p>
+                            <p class="text-[10px] text-slate-500 mt-2 font-medium">Valid records processed in simulation window</p>
+                        </div>
+                        <div class="p-6 bg-slate-50/50 rounded-3xl border border-slate-100">
+                            <p class="text-[10px] font-black text-slate-400 uppercase tracking-widest mb-2">Ingestion Status</p>
+                            <div class="flex items-center gap-2 text-emerald-600 font-black text-sm">
+                                <i data-lucide="check-circle-2" class="w-4 h-4"></i>
+                                Schema Validated
+                            </div>
+                            <p class="text-[10px] text-slate-500 mt-2 font-medium">All structural constraints satisfied</p>
+                        </div>
+                    </div>
+                `;
+            }
+            lucide.createIcons();
+        } catch (e) {
+            console.error(e);
+        }
+    }
+
+    window.toggleMenu = function (id) {
+        const menu = document.getElementById(`menu-${id}`);
+        const isHidden = menu.classList.contains('hidden');
+
+        // Hide all others
+        document.querySelectorAll('[id^="menu-"]').forEach(el => el.classList.add('hidden'));
+
+        if (isHidden) menu.classList.remove('hidden');
+
+        const closeOnOutside = (e) => {
+            if (!menu.contains(e.target) && !e.target.closest('button')) {
+                menu.classList.add('hidden');
+                document.removeEventListener('click', closeOnOutside);
+            }
+        };
+        setTimeout(() => document.addEventListener('click', closeOnOutside), 10);
+    }
+
+    window.modifyDataset = function () {
+        const modal = document.getElementById('upload-modal');
+        document.getElementById('db-name-wrapper').classList.add('hidden');
+        document.getElementById('modal-db-name').value = 'Existing Dataset'; // Placeholder not used by backend if modifying
+        modal.dataset.mode = 'modify';
+        modal.classList.remove('hidden');
+        lucide.createIcons();
+    }
+
+    // Modal Controls
+    const uploadModal = document.getElementById('upload-modal');
+    document.getElementById('open-upload-modal').addEventListener('click', () => {
+        document.getElementById('db-name-wrapper').classList.remove('hidden');
+        document.getElementById('modal-db-name').value = '';
+        document.getElementById('modal-tx-label').textContent = 'Select File';
+        document.getElementById('modal-cust-label').textContent = 'Select File';
+        uploadModal.dataset.mode = 'create';
+        uploadModal.classList.remove('hidden');
+        lucide.createIcons();
+    });
+
+    document.getElementById('close-upload-modal').addEventListener('click', () => uploadModal.classList.add('hidden'));
+    document.getElementById('cancel-upload').addEventListener('click', () => uploadModal.classList.add('hidden'));
+
+    // File Input Handlers
+    document.getElementById('modal-tx-file').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            document.getElementById('modal-tx-label').textContent = file.name;
+            document.getElementById('modal-tx-label').classList.add('text-blue-600');
+        }
+    });
+
+    document.getElementById('modal-cust-file').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            document.getElementById('modal-cust-label').textContent = file.name;
+            document.getElementById('modal-cust-label').classList.add('text-emerald-600');
+        }
+    });
+
+    // Handle Upload
+    document.getElementById('modal-upload-btn').addEventListener('click', async () => {
+        const txFile = document.getElementById('modal-tx-file').files[0];
+        const custFile = document.getElementById('modal-cust-file').files[0];
+        const dbName = document.getElementById('modal-db-name').value;
+        const error = document.getElementById('modal-upload-error');
+
+        error.classList.add('hidden');
+
+        if (!dbName) {
+            error.textContent = "Please provide a name for this database.";
+            error.classList.remove('hidden');
+            return;
+        }
+
+        if (!txFile || !custFile) {
+            error.textContent = "Both Transaction and Customer files are required.";
+            error.classList.remove('hidden');
+            return;
+        }
+
+        const btn = document.getElementById('modal-upload-btn');
+        const text = document.getElementById('modal-upload-text');
+        const mode = uploadModal.dataset.mode || 'create';
+
+        btn.disabled = true;
+        text.textContent = 'Parsing Datasets...';
+
+        const csrftoken = getCookie('csrftoken');
+        const formData = new FormData();
+        formData.append('files', txFile);
+        formData.append('files', custFile);
+        if (mode === 'create') {
+            formData.append('dataset_name', dbName);
+        } else {
+            // For modify, we omit or pre-fill. User said "shouldnt ask for name"
+            // Backend will likely reuse latest if not provided or we could send a default
+        }
+
+        try {
+            const response = await fetch('/api/upload/data/', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': csrftoken
+                },
+                body: formData
+            });
+
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.message || 'Data ignition failed');
+            }
+
+            window.location.reload();
+        } catch (e) {
+            error.textContent = e.message;
+            error.classList.remove('hidden');
+            btn.disabled = false;
+            text.textContent = 'Initialize Ignition';
+            lucide.createIcons();
+        }
+    });
+
+    window.deleteDataset = async function (id) {
+        if (!confirm('Are you sure you want to delete this dataset? All associated transactions, alerts, and simulation runs will be permanently removed.')) return;
+
+        try {
+            const csrftoken = getCookie('csrftoken');
+            const res = await fetch(`/api/upload/${id}/`, {
+                method: 'DELETE',
+                headers: {
+                    'X-CSRFToken': csrftoken
+                }
+            });
+
+            if (res.ok) {
+                window.location.reload();
+            } else {
+                alert('Failed to delete dataset');
+            }
+        } catch (e) {
+            console.error('Delete failed', e);
+            alert('Error deleting dataset');
+        }
+    }
+
+    // CSRF Helper
+    function getCookie(name) {
+        let cookieValue = null;
+        if (document.cookie && document.cookie !== '') {
+            const cookies = document.cookie.split(';');
+            for (let i = 0; i < cookies.length; i++) {
+                const cookie = cookies[i].trim();
+                if (cookie.substring(0, name.length + 1) === (name + '=')) {
+                    cookieValue = decodeURIComponent(cookie.substring(name.length + 1));
+                    break;
+                }
+            }
+        }
+        return cookieValue;
+    }
+
+    loadDatabaseStats();
+</script>
+{% endblock %}

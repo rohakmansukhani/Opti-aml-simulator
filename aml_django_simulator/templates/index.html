@@ -1,0 +1,311 @@
+{% extends 'base.html' %}
+
+{% block title %}Authentication - SecureCore{% endblock %}
+
+{% block content %}
+<div id="app" data-version="2.1"
+    class="min-h-screen flex flex-col items-center justify-center p-6 bg-slate-50 relative overflow-hidden">
+    <!-- Background Decoration -->
+    <div class="absolute top-0 left-0 w-full h-full overflow-hidden pointer-events-none">
+        <div class="absolute top-[-10%] left-[-10%] w-[40%] h-[40%] bg-blue-100/50 rounded-full blur-3xl opacity-60">
+        </div>
+        <div
+            class="absolute bottom-[-10%] right-[-10%] w-[40%] h-[40%] bg-indigo-100/50 rounded-full blur-3xl opacity-60">
+        </div>
+    </div>
+
+    <!-- Logo Section -->
+    <div class="mb-12 relative z-10 animate-in">
+        <div
+            class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center shadow-lg shadow-blue-200 rotate-12 hover:rotate-0 transition-transform duration-500 cursor-pointer">
+            <i data-lucide="activity" class="text-white w-10 h-10"></i>
+        </div>
+    </div>
+
+    <!-- Auth Section -->
+    <div id="auth-section" class="w-full max-w-md relative z-10 animate-in {% if is_authenticated %}hidden{% endif %}"
+        style="animation-delay: 0.1s;">
+        <div class="bg-white p-8 rounded-3xl shadow-xl border border-slate-100 backdrop-blur-sm bg-white/90">
+            <div class="text-center mb-8">
+                <div
+                    class="inline-flex justify-center items-center w-12 h-12 rounded-2xl bg-blue-50 text-blue-600 mb-4">
+                    <i data-lucide="mail" class="w-6 h-6"></i>
+                </div>
+                <h2 id="auth-title" class="text-2xl font-bold text-slate-900">AML Simulator</h2>
+                <p id="auth-subtitle" class="text-slate-500 text-sm mt-1">Sign in to access your dashboard</p>
+            </div>
+
+            <form id="auth-form" class="space-y-4" method="POST" action="/login/">
+                {% csrf_token %}
+
+                <div>
+                    <label class="block text-xs font-bold text-slate-700 uppercase mb-1 ml-1 tracking-wider">Work
+                        Email</label>
+                    <div class="relative">
+                        <i data-lucide="mail"
+                            class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4"></i>
+                        <input type="email" id="email" name="email" required
+                            class="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all text-sm"
+                            placeholder="test@optimoneytech.com">
+                    </div>
+                </div>
+
+                <div>
+                    <label
+                        class="block text-xs font-bold text-slate-700 uppercase mb-1 ml-1 tracking-wider">Password</label>
+                    <div class="relative">
+                        <i data-lucide="lock"
+                            class="absolute left-4 top-1/2 -translate-y-1/2 text-slate-400 w-4 h-4"></i>
+                        <input type="password" id="password" name="password" required
+                            class="w-full pl-11 pr-4 py-3 bg-slate-50 border border-slate-200 rounded-xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all text-sm"
+                            placeholder="Enter 'admin'">
+                    </div>
+                </div>
+
+                <div id="auth-message" class="hidden text-xs p-3 rounded-xl border"></div>
+
+                <button type="submit" id="submit-btn"
+                    class="w-full bg-blue-600 hover:bg-blue-700 text-white py-3.5 rounded-xl font-bold transition-all shadow-lg shadow-blue-200 flex justify-center items-center group">
+                    <span id="btn-text">Sign In</span>
+                    <i data-lucide="arrow-right"
+                        class="ml-2 w-4 h-4 group-hover:translate-x-1 transition-transform"></i>
+                </button>
+            </form>
+
+            <!-- Auth Toggle Removed -->
+
+        </div>
+    </div>
+
+    <!-- Data Setup Section (Hidden initially or if not auth) -->
+    <div id="setup-section"
+        class="{% if not is_authenticated %}hidden{% endif %} w-full max-w-4xl relative z-10 animate-in">
+        <div class="flex justify-between items-end mb-8">
+            <div>
+                <h1 class="text-4xl font-black text-slate-900 tracking-tight">Data Ignition</h1>
+                <p class="text-slate-500 font-medium">Upload datasets to initialize your simulation engine</p>
+            </div>
+            <a href="/logout/"
+                class="flex items-center px-4 py-2 text-sm font-bold text-slate-600 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all border border-slate-200 bg-white shadow-sm">
+                <i data-lucide="log-out" class="mr-2 w-4 h-4"></i>
+                Sign Out
+            </a>
+        </div>
+
+        <div
+            class="bg-white p-10 rounded-[3rem] shadow-2xl shadow-blue-900/5 border border-slate-100 relative overflow-hidden">
+            <div class="absolute top-0 right-0 w-64 h-64 bg-blue-50/50 rounded-full blur-3xl -mr-32 -mt-32"></div>
+
+            <div class="grid lg:grid-cols-5 gap-12 relative z-10">
+                <div class="lg:col-span-2 space-y-8">
+                    <div
+                        class="w-16 h-16 bg-blue-600 rounded-2xl flex items-center justify-center text-white shadow-xl shadow-blue-200">
+                        <i data-lucide="upload-cloud" class="w-8 h-8"></i>
+                    </div>
+                    <div>
+                        <h3 class="text-2xl font-bold text-slate-900 mb-3">Upload Methodology</h3>
+                        <p class="text-slate-500 text-sm leading-relaxed">
+                            Upload your transaction history and customer profiles to begin.
+                        </p>
+                    </div>
+
+                    <ul class="space-y-4">
+                        <li class="flex items-center gap-3 text-sm font-bold text-slate-600">
+                            <i data-lucide="check-circle-2" class="text-emerald-500 w-5 h-5"></i>
+                            CSV Format Only
+                        </li>
+                        <li class="flex items-center gap-3 text-sm font-bold text-slate-600">
+                            <i data-lucide="check-circle-2" class="text-emerald-500 w-5 h-5"></i>
+                            Field Mapping
+                        </li>
+                    </ul>
+                </div>
+
+                <div class="lg:col-span-3 space-y-8">
+                    <!-- Database Name Input -->
+                    <div>
+                        <label
+                            class="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-2 block">Database
+                            Name</label>
+                        <input type="text" id="db-name"
+                            class="w-full px-5 py-4 bg-slate-50 border border-slate-200 rounded-2xl focus:ring-2 focus:ring-blue-500 focus:bg-white outline-none transition-all font-bold text-slate-700 placeholder:font-normal placeholder:text-slate-400"
+                            placeholder="e.g. Q1 Transaction Data">
+                    </div>
+
+                    <div class="space-y-6">
+                        <div class="group">
+                            <label
+                                class="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-3 block">Transaction
+                                Dataset</label>
+                            <label for="tx-file"
+                                class="flex items-center justify-center w-full p-4 border border-slate-200 rounded-2xl bg-slate-50 hover:bg-white transition-all cursor-pointer shadow-sm">
+                                <span id="tx-label" class="text-sm font-bold text-slate-600">Select Transaction
+                                    CSV</span>
+                                <input type="file" id="tx-file" accept=".csv" class="hidden">
+                            </label>
+                        </div>
+
+                        <div class="group">
+                            <label
+                                class="text-[10px] font-black text-slate-500 uppercase tracking-[0.2em] mb-3 block">Customer
+                                Repository</label>
+                            <label for="cust-file"
+                                class="flex items-center justify-center w-full p-4 border border-slate-200 rounded-2xl bg-slate-50 hover:bg-white transition-all cursor-pointer shadow-sm">
+                                <span id="cust-label" class="text-sm font-bold text-slate-600">Select Customer
+                                    CSV</span>
+                                <input type="file" id="cust-file" accept=".csv" class="hidden">
+                            </label>
+                        </div>
+                    </div>
+
+                    <div id="upload-error"
+                        class="hidden p-4 bg-red-50 text-red-700 text-xs font-bold rounded-2xl border border-red-100 animate-pulse">
+                    </div>
+
+                    <div class="grid grid-cols-2 gap-4">
+                        <button id="use-existing-btn" disabled
+                            class="bg-slate-100 text-slate-400 py-5 rounded-2xl font-bold transition-all flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed hover:bg-slate-200 hover:text-slate-600">
+                            Use Existing Data
+                        </button>
+                        <button id="upload-btn"
+                            class="bg-blue-600 hover:bg-blue-700 text-white py-5 rounded-2xl font-black transition-all flex items-center justify-center disabled:opacity-30 disabled:cursor-not-allowed shadow-xl shadow-blue-200 group">
+                            <span id="upload-text">Initialize Engine</span>
+                            <i data-lucide="zap"
+                                class="ml-2 w-5 h-5 group-hover:scale-125 group-hover:rotate-12 transition-transform fill-white"></i>
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <p class="mt-12 text-slate-400 text-[10px] font-black tracking-[0.3em] uppercase relative z-10">
+        AML Sandbox Simulator v2.0
+    </p>
+</div>
+{% endblock %}
+
+{% block extra_js %}
+<script>
+    const authSection = document.getElementById('auth-section');
+    const setupSection = document.getElementById('setup-section');
+    const authForm = document.getElementById('auth-form');
+
+    function showSetup() {
+        authSection.classList.add('hidden');
+        setupSection.classList.remove('hidden');
+        lucide.createIcons();
+    }
+
+    const isAuthenticated = "{{ is_authenticated|yesno:'true,false' }}" === "true";
+    if (isAuthenticated) {
+        checkState();
+    }
+
+    // Check if we already have data (via API) or just stay here for setup
+    // For now, if logged in, we check if simulation is "active"
+    // Check existing data state
+    async function checkState() {
+        try {
+            const res = await fetch('/api/dashboard/stats/');
+            if (res.ok) {
+                const data = await res.json();
+                const existingBtn = document.getElementById('use-existing-btn');
+
+                if (data.has_data) {
+                    existingBtn.disabled = false;
+                    existingBtn.classList.remove('bg-slate-100', 'text-slate-400');
+                    existingBtn.classList.add('bg-white', 'border', 'border-slate-200', 'text-slate-700', 'shadow-sm');
+                    existingBtn.innerHTML = `
+                        <i data-lucide="database" class="w-4 h-4 mr-2 text-emerald-500"></i>
+                        Use Existing Data
+                    `;
+                    existingBtn.onclick = () => window.location.href = '/dashboard/';
+                    lucide.createIcons();
+                }
+                showSetup();
+            } else {
+                showSetup();
+            }
+        } catch (e) {
+            showSetup();
+        }
+    }
+
+
+    // File Input Handlers
+    document.getElementById('tx-file').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            document.getElementById('tx-label').textContent = file.name;
+            document.getElementById('tx-label').classList.add('text-blue-600');
+        }
+    });
+
+    document.getElementById('cust-file').addEventListener('change', (e) => {
+        const file = e.target.files[0];
+        if (file) {
+            document.getElementById('cust-label').textContent = file.name;
+            document.getElementById('cust-label').classList.add('text-emerald-600');
+        }
+    });
+
+    // Handle Upload
+    document.getElementById('upload-btn').addEventListener('click', async () => {
+        const txFile = document.getElementById('tx-file').files[0];
+        const custFile = document.getElementById('cust-file').files[0];
+        const dbName = document.getElementById('db-name').value;
+        const error = document.getElementById('upload-error');
+
+        error.classList.add('hidden');
+
+        if (!dbName) {
+            error.textContent = "Please provide a name for this database.";
+            error.classList.remove('hidden');
+            return;
+        }
+
+        if (!txFile || !custFile) {
+            error.textContent = "Both Transaction and Customer files are required.";
+            error.classList.remove('hidden');
+            return;
+        }
+
+        const btn = document.getElementById('upload-btn');
+        const text = document.getElementById('upload-text');
+
+        btn.disabled = true;
+        text.textContent = 'Parsing Datasets...';
+
+        const csrftoken = document.querySelector('[name=csrfmiddlewaretoken]').value;
+        const formData = new FormData();
+        formData.append('files', txFile);
+        formData.append('files', custFile);
+        formData.append('dataset_name', dbName);
+
+        try {
+            const response = await fetch('/api/upload/data/', {
+                method: 'POST',
+                headers: {
+                    'X-CSRFToken': csrftoken
+                },
+                body: formData
+            });
+
+            if (!response.ok) {
+                const errData = await response.json();
+                throw new Error(errData.message || 'Data ignition failed');
+            }
+
+            const result = await response.json();
+            window.location.href = '/dashboard/';
+        } catch (e) {
+            error.textContent = e.message;
+            error.classList.remove('hidden');
+            btn.disabled = false;
+            text.textContent = 'Initialize Engine';
+        }
+    });
+</script>
+{% endblock %}
+```

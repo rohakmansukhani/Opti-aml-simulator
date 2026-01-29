@@ -41,3 +41,5 @@ RESULTS.txt
 # Artifacts (documentation only)
 .gemini/
 
+# Folders
+/backend/
